@@ -4,6 +4,7 @@ import { Scheduler } from '../core/scheduler';
 import { GCD_MS, type Ability } from '../model/ability';
 import { Actor } from '../model/actor';
 import type { BossDefinition } from '../model/boss';
+import type { MobDefinition, MobPackDefinition } from '../model/mobPack';
 import { hasteMult, type BehaviorStats, type CombatStats } from '../model/stats';
 import { validateStance, type StanceConfig } from '../model/stance';
 import { chooseAction, shouldUseBurst } from './decision';
@@ -14,6 +15,7 @@ import {
   rollSlowPotionMs,
 } from './mistakes';
 import { installBoss } from './bossScript';
+import { installPack } from './packScript';
 
 export interface CharacterDef {
   name: string;
@@ -23,12 +25,20 @@ export interface CharacterDef {
   abilities: Ability[];
 }
 
+/**
+ * A fight runs exactly one encounter: a boss (single enemy + mechanics,
+ * ends when the boss dies) or a mob pack (2–3 enemies from t=0, ends when
+ * all are dead). Provide exactly one of `boss` / `pack`.
+ */
 export interface FightSetup {
   player: CharacterDef;
-  boss: BossDefinition;
+  boss?: BossDefinition;
+  pack?: MobPackDefinition;
   stance: StanceConfig;
   seed: number;
 }
+
+export type EndCondition = 'bossDead' | 'allEnemiesDead';
 
 export type FightResultKind = 'kill' | 'playerDeath' | 'enrage' | 'timeout';
 
@@ -44,6 +54,20 @@ const DAMAGE_VARIANCE = 0.15;
 export const PLAYER_ID = 'player';
 export const BOSS_ID = 'boss';
 
+/** Zeroed combat stats for a non-player combatant (boss, add or mob). */
+export function enemyStats(hp: number): CombatStats {
+  return {
+    maxHp: hp,
+    attackPower: 0,
+    spellPower: 0,
+    healingPower: 0,
+    critChance: 0,
+    hastePct: 0,
+    armor: 0,
+    resistances: {},
+  };
+}
+
 /** One rolled run. Pure function of (setup, seed) — bit-identical everywhere. */
 export function runFight(setup: FightSetup): FightResult {
   return new Fight(setup).run();
@@ -54,9 +78,16 @@ export class Fight {
   readonly log = new EventLog();
   readonly rng: Rng;
   readonly player: Actor;
-  readonly boss: Actor;
+  /** The boss actor for boss encounters; null for pack encounters. */
+  readonly boss: Actor | null;
+  /** Enemies present from t=0 (the boss, or each mob of a pack). */
+  readonly enemies: Actor[] = [];
+  /** Enemies spawned mid-fight (boss phase-2 adds). */
   readonly adds: Actor[] = [];
   readonly setup: FightSetup;
+  private readonly endCondition: EndCondition;
+  /** actorId → mob definition, for pack encounters (XP attribution). */
+  readonly mobDefs = new Map<string, MobDefinition>();
 
   ended: FightResultKind | null = null;
   enraged = false;
@@ -67,23 +98,33 @@ export class Fight {
 
   constructor(setup: FightSetup) {
     validateStance(setup.stance);
+    if (setup.boss && setup.pack) {
+      throw new Error('fight needs exactly one of boss / pack, not both');
+    }
     this.setup = setup;
     this.rng = new Rng(setup.seed);
     this.player = new Actor(PLAYER_ID, setup.player.name, 'players', setup.player.stats);
-    this.boss = new Actor(BOSS_ID, setup.boss.name, 'enemies', {
-      maxHp: setup.boss.hp,
-      attackPower: 0,
-      spellPower: 0,
-      healingPower: 0,
-      critChance: 0,
-      hastePct: 0,
-      armor: 0,
-      resistances: {},
-    });
+
+    if (setup.boss) {
+      this.boss = new Actor(BOSS_ID, setup.boss.name, 'enemies', enemyStats(setup.boss.hp));
+      this.enemies = [this.boss];
+      this.endCondition = 'bossDead';
+    } else if (setup.pack) {
+      this.boss = null;
+      this.endCondition = 'allEnemiesDead';
+      for (const mob of setup.pack.mobs) {
+        const actor = new Actor(mob.id, mob.name, 'enemies', enemyStats(mob.hp));
+        this.enemies.push(actor);
+        this.mobDefs.set(mob.id, mob);
+      }
+    } else {
+      throw new Error('fight needs a boss or a pack');
+    }
   }
 
   run(): FightResult {
-    installBoss(this);
+    if (this.setup.boss) installBoss(this);
+    else installPack(this);
     this.scheduler.at(0, () => this.decide());
     this.scheduler.at(MAX_FIGHT_MS, () => this.end('timeout'));
     this.scheduler.run(() => this.ended !== null);
@@ -105,7 +146,7 @@ export class Fight {
   }
 
   livingEnemies(): Actor[] {
-    return [this.boss, ...this.adds].filter((a) => a.alive);
+    return [...this.enemies, ...this.adds].filter((a) => a.alive);
   }
 
   // ---- Player action cycle -------------------------------------------------
@@ -239,13 +280,26 @@ export class Fight {
       if (target === this.boss) this.checkPhase();
       return;
     }
+    // The boss dying ends a boss fight immediately, with no death event —
+    // this keeps boss event streams byte-identical to before packs existed.
     if (target === this.boss) {
       this.end('kill');
       return;
     }
-    this.emit({ type: 'death', source: target.id });
+    // Any other enemy (a phase-2 add, or a pack mob) emits a death event.
+    // Pack mobs carry their id + XP so grind rates are recoverable from the
+    // stream alone; this fires before the clear so the last kill's XP counts.
+    const mob = this.mobDefs.get(target.id);
+    this.emit({
+      type: 'death',
+      source: target.id,
+      ...(mob ? { meta: { mobId: mob.id, xpPerKill: mob.xpPerKill } } : {}),
+    });
     if (this.overdueAdds.delete(target.id) && this.overdueAdds.size === 0) {
       this.emit({ type: 'buffExpired', source: BOSS_ID, target: BOSS_ID, meta: { buffId: 'tantrum' } });
+    }
+    if (this.endCondition === 'allEnemiesDead' && this.livingEnemies().length === 0) {
+      this.end('kill');
     }
   }
 
@@ -253,6 +307,7 @@ export class Fight {
   onPhase2: (() => void) | null = null;
 
   private checkPhase(): void {
+    if (!this.boss || !this.setup.boss) return;
     if (this.phase === 1 && this.boss.hpPct * 100 <= this.setup.boss.addPhase.atHpPct) {
       this.phase = 2;
       this.emit({ type: 'phaseChange', source: BOSS_ID, meta: { phase: 2 } });

@@ -1,46 +1,28 @@
 import type { CharacterDef } from '../../sim/engine';
-import type { BehaviorStats, CombatStats } from '../../model/stats';
+import type { Ability } from '../../model/ability';
+import type { BehaviorStats } from '../../model/stats';
 import { applyGear, type Item } from '../../model/item';
+import { LEVEL_CAP, abilitiesUpToLevel, nakedBaseForLevel } from '../../model/progression';
 import { GEAR_SETS } from '../items';
 
 /**
  * v1 test kit: the Mage (GDD §2) — the class with the clearest
  * single-target↔AoE stance tradeoff. Numbers are placeholder balance.
  *
- * Stats assemble as naked base + gear; the 'default' set reproduces the
- * pre-gear balance (100 SP, 2400 HP, 15% crit), so existing tuning holds.
+ * Stats assemble as naked base + gear; the naked base is level-indexed
+ * (nakedBaseForLevel) and the kit is gated by the unlock arc — at the default
+ * level 10 the base is 60 SP / 2,100 HP and the full kit is present, so the
+ * pre-level baseline (and all existing tuning) is untouched. The 'default'
+ * gear set reproduces the pre-gear balance (100 SP, 2400 HP, 15% crit).
  */
-const NAKED_BASE: CombatStats = {
-  maxHp: 2100,
-  attackPower: 0,
-  spellPower: 60,
-  healingPower: 0,
-  critChance: 0.1,
-  hastePct: 0,
-  armor: 60,
-  resistances: {},
-};
-
 const BASE_BEHAVIOR: BehaviorStats = {
   damageWhileMoving: 0.6,
   aoeEfficiency: 1.0,
   discipline: 50,
 };
 
-export function makeMage(
-  behaviorOverride?: Partial<BehaviorStats>,
-  gear: Item[] = GEAR_SETS['default']!,
-): CharacterDef {
-  const { stats, behavior } = applyGear(
-    NAKED_BASE,
-    { ...BASE_BEHAVIOR, ...behaviorOverride },
-    gear,
-  );
-  return {
-    name: 'Elara',
-    stats,
-    behavior,
-    abilities: [
+/** Full kit; makeMage filters it to the abilities learned by the given level. */
+const FULL_KIT: Ability[] = [
       {
         id: 'fireball',
         name: 'Fireball',
@@ -94,6 +76,23 @@ export function makeMage(
         effect: { kind: 'heal', base: 750, coeff: 0 },
         tags: ['consumable'],
       },
-    ],
+];
+
+export function makeMage(
+  behaviorOverride?: Partial<BehaviorStats>,
+  gear: Item[] = GEAR_SETS['default']!,
+  level: number = LEVEL_CAP,
+): CharacterDef {
+  const { stats, behavior } = applyGear(
+    nakedBaseForLevel(level),
+    { ...BASE_BEHAVIOR, ...behaviorOverride },
+    gear,
+  );
+  const learned = new Set(abilitiesUpToLevel(level));
+  return {
+    name: 'Elara',
+    stats,
+    behavior,
+    abilities: FULL_KIT.filter((a) => learned.has(a.id)),
   };
 }

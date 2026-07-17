@@ -2,8 +2,9 @@
 
 > Update this file whenever a slice lands. Roadmap definition: DESIGN.md §10.
 
-**Current phase: 3 (Progression), slice 1 of 6 done; world & leveling design
-done (GDD v0.4) — next up: slice 2 (levels + zone grinding, engine).**
+**Current phase: 3 (Progression), slices 1–2 of 6 done; world & leveling
+design done (GDD v0.4) — next up: slice 3 (world map, travel, task queues,
+web).**
 As of July 2026.
 
 ## Phase checklist
@@ -20,16 +21,17 @@ As of July 2026.
   - [x] World & leveling **design** (GDD v0.4): level system + unlock arc
         (DESIGN.md §2), v1 world four regions + XP/risk grinding model
         (DESIGN.md §5). Design only — implementation is slices 2–3 below.
-  - [ ] **Slice 2 — Levels + zone grinding (engine).** Implement per
-        DESIGN.md §2 "Levels & the Unlock Arc" + §5 "Leveling: XP/hour,
-        Risk & Devaluation": level-indexed naked base (L10 naked must equal
-        the current base — 60 SP / 2,100 HP — so existing balance holds),
-        XP curve, ability/intent unlock table as data, declarative mob-pack
-        encounters for the four zones (§5 region table), sim-derived
-        XP/hour + deaths/hour (cached Monte Carlo vs. mob pack with pull-cycle
-        downtime), overlevel XP devaluation. CLI harness: `--level`,
-        `--zone` → prints XP/hour, risk tier, deaths/hour. Zone bosses:
-        Bandit Warlord (type-1 lite) + Emberwing (type-2) as BossDefinitions.
+  - [x] **Slice 2 — Levels + zone grinding (engine).** Level-indexed naked
+        base (`nakedBaseForLevel`, L1 30 SP/1,200 HP → L10 60 SP/2,100 HP; L10
+        equals the old base so all Cinder Maw tuning + the 27 tests hold),
+        XP curve + unlock table as data (`model/progression.ts`;
+        `makeMage(…, level)` gates the kit). Sim generalized to N enemies
+        (`Fight.enemies` + end condition; boss streams byte-identical) so a
+        declarative `MobPackDefinition` runs as a real fight; `installPack`
+        mirrors `installBoss`. Sim-derived `grindRates` (event-stream only:
+        XP/hour, deaths/hour, risk tier) + overlevel `devalue`. Four zone
+        packs (`content/mobs/zones.ts`) + zone bosses Bandit Warlord (type-1
+        lite) & Emberwing (type-2). CLI: `--level`, `--zone`, `--boss`.
   - [ ] **Slice 3 — World map, travel, task queues (web).** Region map UI
         over the four regions, send-to-grind as a queueable task, travel
         times, real-time progress + offline catch-up (deterministic
@@ -66,6 +68,27 @@ Quadrant sweep (`--n 1000`, Balanced defaults unless noted):
 | default, defaults | 96% | AFK floor (GDD §2 law 2) |
 | best, Guarded + discipline 10 | 100%, ~5:19 | outgearing |
 
+## Balance state (leveling & zones, slice 2)
+
+Sim-derived via `grindRates` (`--n 400+`, default pull cycle 6 s approach /
+12 s recovery / 60 s death penalty; risk tiers: <1 low, <5 risky, ≥5 deadly/hr).
+All numbers placeholder-tunable. XP curve `xpToNext ≈ 100·n^1.6`.
+
+| Zone (band) | mobs | on-band XP/hr | risk gradient |
+|---|---|---|---|
+| Heartfield (1–3) | 3× boar, xp 6 | L2 starter ~1.4k | low on-band |
+| Duskwood (3–6) | 3× wolf, xp 14 | L5 starter ~2.6k | low on-band |
+| Ashen Foothills (6–9) | 3× stalker (fire), xp 30 | L8 default ~4.7k | low on-band |
+| Cinder Wastes (9–10) | 3× horror (fire), xp 60 | L10 best ~11k | **L6 starter deadly (~20 deaths/hr), on-band low** — the lethality gate |
+
+- Overlevel devaluation confirmed: Heartfield at L8 → XP × 0.1 floor.
+- AoE/gear scaling automatic: better stance/gear → higher XP/hr (grind tests).
+- Zone bosses (defaults): Bandit Warlord L3 starter ~100% kill, ~0:47;
+  Emberwing L9 default ~99% kill, ~2:43. Both tune via `--boss`.
+- **Note on wall-clock pacing:** raw sim XP/hr is high vs. the GDD §2 "~1–2 h/
+  level" target — real-time gating is meant to come from the dev/world time
+  multiplier (slice 3), not from slowing the sim. Left as-is deliberately.
+
 Known gaps / deferred items:
 
 - Knowledge levers are thin until phase 4 (boss plans, familiarity) — the
@@ -79,4 +102,8 @@ Known gaps / deferred items:
 
 - All dev in Docker: `./dev …`, `./web` → http://localhost:5174.
 - Repo history: one commit per slice. Engine content =
-  `packages/engine/src/content/` (mage.ts, cinderMaw.ts, items.ts).
+  `packages/engine/src/content/` — `classes/mage.ts`, `bosses/` (cinderMaw,
+  banditWarlord, emberwing), `mobs/zones.ts`, `items.ts`. Level/XP/unlock
+  rules in `model/progression.ts`; grind rates in `analysis/grind.ts`.
+- CLI: `--level`, `--zone <heartfield|duskwood|ashen-foothills|cinder-wastes>`
+  (grind report), `--boss <cinder-maw|bandit-warlord|emberwing>` (boss report).

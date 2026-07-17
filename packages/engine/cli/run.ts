@@ -1,17 +1,26 @@
 /**
- * Standalone test harness: N Monte Carlo iterations of the Mage vs.
- * Cinder Maw, distribution report on stdout.
+ * Standalone tuning harness.
  *
- *   pnpm cli -- --n 5000 --seed 42 --offense 0.6 --targeting 0.5 \
- *               --potion 35 --discipline 50 [--trace] [--json]
+ * Boss report (default) — N Monte Carlo runs of the Mage vs. a boss:
+ *   pnpm cli -- --n 5000 --seed 42 --level 10 --gear best --boss cinder-maw \
+ *               --offense 0.6 --targeting 0.5 --potion 35 --discipline 50 [--trace] [--json]
+ *
+ * Grind report — sim-derived XP/hour, risk tier and deaths/hour for a zone:
+ *   pnpm cli -- --level 2 --zone heartfield --gear starter
  */
 import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
+import { makeBanditWarlord } from '../src/content/bosses/banditWarlord';
+import { makeEmberwing } from '../src/content/bosses/emberwing';
 import { makeMage } from '../src/content/classes/mage';
+import { ZONES } from '../src/content/mobs/zones';
 import { GEAR_SETS } from '../src/content/items';
+import { packBandMax } from '../src/model/mobPack';
+import type { BossDefinition } from '../src/model/boss';
 import { DEFAULT_STANCE } from '../src/model/stance';
 import { runFight } from '../src/sim/engine';
 import { formatEvents } from '../src/analysis/metrics';
 import { runMonteCarlo } from '../src/analysis/montecarlo';
+import { DEFAULT_PULL_CYCLE, devalue, grindRates } from '../src/analysis/grind';
 
 function arg(name: string, fallback: number): number {
   const i = process.argv.indexOf(`--${name}`);
@@ -29,6 +38,7 @@ function strArg(name: string, fallback: string): string {
 
 const n = arg('n', 2000);
 const seed = arg('seed', 42);
+const level = arg('level', 10);
 const stance = {
   ...DEFAULT_STANCE,
   offense: arg('offense', DEFAULT_STANCE.offense),
@@ -40,9 +50,68 @@ const gearName = strArg('gear', 'default');
 const gear = GEAR_SETS[gearName];
 if (!gear) throw new Error(`unknown gear set '${gearName}' (${Object.keys(GEAR_SETS).join('/')})`);
 
+const player = makeMage({ discipline }, gear, level);
+
+const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+const mmss = (ms: number) => {
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+const sortDesc = (rec: Record<string, number>) =>
+  Object.entries(rec).sort((a, b) => b[1] - a[1]);
+
+// ---- Grind report (--zone) -------------------------------------------------
+
+const zoneName = strArg('zone', '');
+if (zoneName) {
+  const makePack = ZONES[zoneName];
+  if (!makePack) throw new Error(`unknown zone '${zoneName}' (${Object.keys(ZONES).join('/')})`);
+  const pack = makePack();
+  const bandMax = packBandMax(pack);
+
+  const started = performance.now();
+  const rates = grindRates({ player, stance, pack }, DEFAULT_PULL_CYCLE, n, seed);
+  const elapsed = performance.now() - started;
+
+  if (flag('json')) {
+    console.log(JSON.stringify({ zone: zoneName, level, bandMax, ...rates }, null, 2));
+    process.exit(0);
+  }
+
+  const adjustedXp = devalue(rates.xpPerHour, level, bandMax);
+  console.log(`\n${pack.name} — level ${level}, ${n} pulls, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
+  console.log(
+    `  character: ${player.stats.spellPower} SP, ${player.stats.maxHp} HP, ${player.abilities.length} abilities, discipline ${discipline}, gear ${gearName}`,
+  );
+  console.log(`  zone band: ${pack.mobs[0]!.levelBand.min}–${bandMax}  (${pack.mobs.length} mobs/pull)`);
+  console.log(`\n  XP/hour:        ${Math.round(rates.xpPerHour)} raw`);
+  if (adjustedXp < rates.xpPerHour - 0.5) {
+    console.log(`                  ${Math.round(adjustedXp)} after overlevel devaluation`);
+  }
+  console.log(`  Risk tier:      ${rates.riskTier}`);
+  console.log(`  Deaths/hour:    ${rates.deathsPerHour.toFixed(2)}`);
+  console.log(`  Kills/hour:     ${Math.round(rates.killsPerHour)}`);
+  console.log(
+    `  Pull:           ${mmss(rates.avgPullMs)} avg  (${rates.avgXpPerPull.toFixed(1)} XP, ${pct(rates.deathRatePerPull)} died)`,
+  );
+  console.log();
+  process.exit(0);
+}
+
+// ---- Boss report (default) -------------------------------------------------
+
+const BOSSES: Record<string, (o?: Partial<BossDefinition>) => BossDefinition> = {
+  'cinder-maw': makeCinderMaw,
+  'bandit-warlord': makeBanditWarlord,
+  emberwing: makeEmberwing,
+};
+const bossName = strArg('boss', 'cinder-maw');
+const makeBoss = BOSSES[bossName];
+if (!makeBoss) throw new Error(`unknown boss '${bossName}' (${Object.keys(BOSSES).join('/')})`);
+
 const setup = {
-  player: makeMage({ discipline }, gear),
-  boss: makeCinderMaw({
+  player,
+  boss: makeBoss({
     ...(arg('hp', 0) > 0 ? { hp: arg('hp', 0) } : {}),
     ...(arg('enrage', 0) > 0 ? { enrageAtMs: arg('enrage', 0) * 1000 } : {}),
   }),
@@ -59,15 +128,7 @@ if (flag('json')) {
   process.exit(0);
 }
 
-const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
-const mmss = (ms: number) => {
-  const s = Math.round(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-};
-const sortDesc = (rec: Record<string, number>) =>
-  Object.entries(rec).sort((a, b) => b[1] - a[1]);
-
-console.log(`\n${setup.boss.name} — ${n} runs, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
+console.log(`\n${setup.boss.name} — level ${level}, ${n} runs, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
 console.log(
   `  stance: offense ${stance.offense}  targeting ${stance.targeting}  potion <${stance.potionThresholdPct}%  discipline ${discipline}  gear ${gearName} (${setup.player.stats.spellPower} SP, ${setup.player.stats.maxHp} HP)`,
 );

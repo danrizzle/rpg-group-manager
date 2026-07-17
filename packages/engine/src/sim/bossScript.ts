@@ -8,7 +8,8 @@ import { BOSS_ID, type Fight } from './engine';
  * All periods can jitter (timerJitterPct) so plans must be robust.
  */
 export function installBoss(fight: Fight): void {
-  const def = fight.setup.boss;
+  const def = fight.setup.boss!;
+  const boss = fight.boss!; // installBoss only runs for boss encounters
   const rng = fight.rng.fork('boss');
 
   const jitter = (ms: number): number =>
@@ -31,12 +32,12 @@ export function installBoss(fight: Fight): void {
     };
     fight.scheduler.in(swingMs, swing);
   };
-  meleeLoop(fight.boss, def.meleeDamage, def.meleeSwingMs, bossDamageMult);
+  meleeLoop(boss, def.meleeDamage, def.meleeSwingMs, bossDamageMult);
 
   // Type 2a — unavoidable timeline abilities (sustain check).
   for (const timed of def.timeline) {
     const fire = () => {
-      if (fight.ended !== null || !fight.boss.alive) return;
+      if (fight.ended !== null || !boss.alive) return;
       fight.emit({ type: 'castEnd', source: BOSS_ID, meta: { abilityId: timed.id } });
       fight.damagePlayer(timed.damage * bossDamageMult(), timed.damageType, BOSS_ID, {
         abilityId: timed.id,
