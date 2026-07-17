@@ -5,7 +5,7 @@ import { CONSUMABLES, CONSUMABLES_BY_ID, CONSUMABLE_SLOTS } from '../src/content
 import { GEAR_SETS } from '../src/content/items';
 import { normalizeConsumables, type ConsumableDefinition } from '../src/model/consumable';
 import { DEFAULT_STANCE } from '../src/model/stance';
-import { PLAYER_ID, runFight, type FightSetup } from '../src/sim/engine';
+import { PLAYER_ID, runFight, type SoloFightSetup } from '../src/sim/engine';
 import { runMonteCarlo } from '../src/analysis/montecarlo';
 
 const POTION = CONSUMABLES_BY_ID['healing-potion']!;
@@ -17,7 +17,7 @@ const setupWith = (
   consumables: ConsumableDefinition[] | undefined,
   stanceOverride: Partial<typeof DEFAULT_STANCE> = {},
   gear = GEAR_SETS['default']!,
-): FightSetup => ({
+): SoloFightSetup => ({
   player: makeMage(undefined, gear, 10, [], consumables),
   boss: makeCinderMaw(),
   stance: { ...DEFAULT_STANCE, ...stanceOverride },

@@ -7,7 +7,7 @@ import {
   makeAshenFoothillsPack,
 } from '../src/content/mobs/zones';
 import { DEFAULT_STANCE } from '../src/model/stance';
-import { PLAYER_ID, runFight, type FightSetup } from '../src/sim/engine';
+import { PLAYER_ID, runFight, type SoloFightSetup } from '../src/sim/engine';
 import { DEFAULT_PULL_CYCLE, grindRates, type GrindSetup } from '../src/analysis/grind';
 
 const grindSetup = (over: Partial<GrindSetup> = {}): GrindSetup => ({
@@ -25,7 +25,7 @@ describe('grindRates', () => {
   });
 
   it('a cleared 3-mob pull kills all three and only ends after the last', () => {
-    const setup: FightSetup = {
+    const setup: SoloFightSetup = {
       player: makeMage(undefined, GEAR_SETS['best'], 10),
       pack: makeHeartfieldPack(),
       stance: { ...DEFAULT_STANCE },
@@ -95,7 +95,7 @@ describe('grindRates', () => {
   });
 
   it('uses the potion only below threshold against multiple enemies', () => {
-    const setup: FightSetup = {
+    const setup: SoloFightSetup = {
       player: makeMage(undefined, GEAR_SETS['default'], 8),
       pack: makeCinderWastesPack(),
       stance: { ...DEFAULT_STANCE, potionThresholdPct: 40 },

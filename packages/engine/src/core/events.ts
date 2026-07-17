@@ -6,6 +6,7 @@
 export type ActorId = string;
 
 export type EventType =
+  | 'join'
   | 'castStart'
   | 'castEnd'
   | 'damage'

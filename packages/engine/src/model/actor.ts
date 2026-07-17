@@ -8,6 +8,7 @@ interface ActiveBuff {
   expiresAtMs: number;
   damageMult: number;
   critBonus: number;
+  damageTakenMult: number;
   absorbRemaining: number;
 }
 
@@ -58,6 +59,7 @@ export class Actor {
       expiresAtMs: now + effect.durationMs,
       damageMult: effect.damageMult ?? 1,
       critBonus: effect.critBonus ?? 0,
+      damageTakenMult: effect.damageTakenMult ?? 1,
       absorbRemaining: effect.absorb ?? 0,
     });
   }
@@ -79,9 +81,13 @@ export class Actor {
     return Math.min(1, this.stats.critChance + this.activeBuffs(now).reduce((c, b) => c + b.critBonus, 0));
   }
 
-  /** Apply typed damage after mitigation and absorbs. */
+  damageTakenMult(now: number): number {
+    return this.activeBuffs(now).reduce((m, b) => m * b.damageTakenMult, 1);
+  }
+
+  /** Apply typed damage after mitigation CDs, resist/armor and absorbs. */
   takeDamage(amount: number, type: DamageType, now: number): DamageResult {
-    let remaining = Math.round(amount * (1 - mitigation(this.stats, type)));
+    let remaining = Math.round(amount * this.damageTakenMult(now) * (1 - mitigation(this.stats, type)));
     let absorbed = 0;
     for (const buff of this.activeBuffs(now)) {
       if (remaining <= 0) break;

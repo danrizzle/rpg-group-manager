@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
 import { makeMage } from '../src/content/classes/mage';
 import { DEFAULT_STANCE } from '../src/model/stance';
-import { PLAYER_ID, runFight, type FightSetup } from '../src/sim/engine';
+import { PLAYER_ID, runFight, type SoloFightSetup } from '../src/sim/engine';
 import { summarizeRun } from '../src/analysis/metrics';
 
-const baseSetup = (seed: number): FightSetup => ({
+const baseSetup = (seed: number): SoloFightSetup => ({
   player: makeMage(),
   boss: makeCinderMaw(),
   stance: { ...DEFAULT_STANCE },

@@ -136,10 +136,101 @@ As of July 2026.
         completes with loss, workshop snapshot 600000→450000 ms, bank T2
         caps /150, boss-select stales + relabels the sim.
         Building costs deliberately revive the post-bridge timber loop.
-- [ ] **Phase 4 — Group content**: 3–5-char dungeon, trinity (Warrior/Priest
-      kits), boss journal + discovery, boss plan timeline, group CDs, first
-      live calls + tactical pause + call→plan adoption, familiarity, hold DPS,
-      resistances in anger, mechanic type upgrades
+- [ ] **Phase 4 — Group content** (slice plan authored 2026-07-18, before
+      any phase-4 code; engine before web inside every slice; byte-identity
+      for all existing streams when new args are absent; CLI `--json`
+      baselines captured pre-change and byte-compared):
+  - [x] **Slice 1 — Party fight core (engine).** `FightSetup.party?:
+        CharacterDef[]` (exactly one of player/party; `player` = legacy solo
+        path, byte-identical). `CharacterDef.{id, role}`; per-character
+        forked RNG streams (party only). Threat model: per-enemy threat
+        tables, `Ability.threatMult`, healing generates global threat,
+        melee targets top threat (adds default to the last healer — aggro
+        drama the tank answers with AoE threat). Effect target modes:
+        heal `lowest-ally`/`party`, buff `party`, `damageTakenMult` buff
+        (Shield Wall machinery); `powerStat` on damage effects (warrior =
+        attackPower). Timeline abilities hit the whole party (mechanic-type-2
+        upgrade: group heal check); movement windows roll fail-to-move per
+        character; per-char potions/mistakes/charges; fight ends when the
+        whole party is dead; t=0 `join` events document the roster in the
+        stream (party fights only). `summarizeRun`/`fightReview` gain
+        per-character breakdowns (solo output shape unchanged). Tests:
+        byte-identity (boss + pack + consumable streams), party determinism,
+        stream-reconstructed invariants, threat direction (tank holds boss).
+        **Landed:** 13 new tests (92 total green); all 7 pre-change CLI
+        `--json` baselines byte-identical (cinder-maw default/defense-
+        proactive/starter+talents+consumables, emberwing L9, bandit L3,
+        heartfield + cinder-wastes grinds). `SoloFightSetup` convenience
+        type for the legacy-required fields. Solo keeps the main RNG
+        stream; party members run on per-character forks. Web untouched
+        and building.
+  - [ ] **Slice 2 — Trinity kits + Ember Forge (engine).** `makeWarrior`
+        (tank: high armor/HP, attackPower kit, high-threat single + AoE
+        strikes, Shield Wall defensive) + `makePriest` (healer: healingPower
+        kit, single heal `lowest-ally`, group heal, Divine Hymn heal-CD) +
+        class item catalogs incl. fire-resist pieces + gear sets. Group CDs
+        as comp-granted data (`content/groupCds.ts` + `assembleParty`):
+        Battle Shout (warrior, party damage burst), Well-Drilled Team
+        (3 distinct roles → passive discipline bonus). Dungeon model
+        (`model/dungeon.ts`: ordered encounters, trash packs + bosses) +
+        Ember Forge content: Forge Whelps trash, boss 1 **Slagmaw the
+        Smelter** (type 1+2 upgraded: heavy fire timeline vs the whole
+        party — resist gear + ward potions matter in anger; gear answer =
+        fire resist/HP, knowledge answer lands with heal-CD plan slots in
+        slice 5), boss 2 **Forgemaster Vulkan** (phase timing / hold-DPS
+        showcase: HP-triggered add phase vs timed Forge Blast — pushing at
+        the wrong moment overlaps them). CLI `--encounter <id> --party`.
+        Tuning pass per the §2 laws (Normal ≥ ~90% at party defaults with
+        adequate gear, no plan; measure at `--enrage 900` near walls).
+  - [ ] **Slice 3 — Roster + dungeon (web).** Recruits: first Cinder Maw
+        kill unlocks Borin (warrior) + Seren (priest) — backfilled for
+        saves that already killed it. Per-character builds: Elara keeps her
+        legacy top-level persisted fields (zero-risk for live saves);
+        warrior/priest live in a new `roster` record; uniform selectors on
+        top. CharacterPanel gets a character switcher (stance/gear/
+        consumable slots per char; talents Elara-only in v1). Dungeon panel
+        in Cinder Wastes: Ember Forge door, encounters in order (trash
+        gates the bosses per run), party pulls; FightView/Replay/ReviewPanel
+        generalized to N actors from `join` events (per-char DPS/HPS bars,
+        deaths). Party consumable slots draw on the shared bank. Persist v6.
+  - [ ] **Slice 4 — Boss journal + discovery + familiarity (engine + web).**
+        Engine `model/journal.ts`: `discoverFromEvents` (stream-only facts:
+        timeline casts seen, movement/enrage/phase-2/adds/tantrum seen,
+        lowest boss HP reached), monotone merge, `explorationPct`,
+        `redactBoss(def, knowledge)` — undiscovered mechanics no-opped with
+        the banditWarlord no-op patterns so the dummy sim simulates exactly
+        what the journal knows (GDD §4 law); `familiarityBonus(attempts)` →
+        additive discipline (drives both mistakes and call reaction, §2).
+        Web: journal card per dungeon boss (✓/??? rows with timers/triggers
+        from the def once seen, last-wipe line from `fightReview`), dummy
+        sims of dungeon bosses run against the redacted def, per-character
+        familiarity per boss from attempt counts (wipes count — §2), v7.
+  - [ ] **Slice 5 — Boss plan timeline + group CDs + hold DPS (engine +
+        web).** Engine `model/plan.ts`: declarative `BossPlan` — triggers
+        (pull, time, boss-cast, phase, boss-HP-below) × actions (fire
+        ability/group CD, switch a character's named stance/target step,
+        hold/resume DPS). Executor schedules actions after each character's
+        reaction time (discipline) on a forked plan RNG (no main-stream
+        perturbation); `holdDps` gates damage abilities in the decision
+        brain; `burstCds: 'save-for-plan-window'` becomes real (burst CDs
+        held for plan windows). Plan events in the stream. No plan = auto
+        plan (Law 2: Battle Shout on pull, nothing else). Web: plan
+        timeline editor per dungeon boss where **journal entries are the
+        building blocks** (knowledge → levers: only discovered casts/phases
+        are offered as triggers), plans persisted per boss (v8), dummy sim
+        honors the plan vs the redacted boss.
+  - [ ] **Slice 6 — Live calls + tactical pause + call→plan adoption (web +
+        engine).** Engine: `FightSetup.calls?: TimedCall[]` — plan actions
+        fired at a wall time, same arsenal as the plan (§3 ground rule 1),
+        same reaction-time machinery, `call` events in the stream. Web:
+        dungeon pulls run in live mode — playback locked to the frontier,
+        tactical pause, a 2–3 button call palette (Law 1: "All CDs now!",
+        "Heal CD now!", "Stop damage!/Push!"); issuing a call re-runs the
+        deterministic fight with the call appended (past events identical —
+        purity makes live play a fold, not a second engine). Review lists
+        calls made with "adopt into plan" (anchored to the nearest
+        discovered boss cast, else a time trigger) — active play writes
+        your boss plan (§3 ground rule 2).
 - [ ] **Phase 5 — Roster & raids**: 20 chars, loadout library, full call
       palette, mechanic type 4, tier-2 catalyst content, access buildings
 - [ ] **Phase 6 — Guilds**: accounts/sync, server-authoritative real fights
@@ -242,6 +333,61 @@ Known gaps / deferred items:
   funds ~3 potion-equipped pulls or ~2 flask+potion pulls. Respec = 10
   sunleaf (~50 game-min of gathering). All placeholder-tunable in
   `world/professions.ts`.
+
+## Phase 4 — autonomous design decisions (morning review)
+
+Decisions taken overnight without user input; each lists the rejected
+alternative. Grouped by slice as they land.
+
+**Slice planning (pre-code):**
+
+- **Six slices, party sim split from kits/content.** Rejected: one mega
+  "trinity" slice — the byte-identity risk (single-player seams in
+  `Fight`) deserves its own test gate before any content rides on it.
+- **Recruits unlock on the first Cinder Maw kill.** The GDD stage table
+  (§2) has a 2-char mid-game stage v1 doesn't build; the Cinder Wastes
+  door is the phase-4 teaser, and Cinder Maw is "the wall" whose kill
+  proves dungeon-readiness. Rejected: unlock at level 10 (no
+  accomplishment gate) and a separate recruit quest (new machinery).
+- **Warrior/Priest ship without talent trees in v1 phase 4.** The phase-4
+  checklist doesn't list them; per-class trees are phase-5 roster work.
+  Rejected: minimal 3-node trees now (spreads tuning thin across slices).
+- **Elara keeps her legacy top-level store fields; new characters live in
+  a `roster` record.** Zero-migration-risk for the live save (hard law);
+  uniform per-char selectors hide the asymmetry. Rejected: migrating all
+  builds into `characters{}` (cleaner, but risks the real save for purely
+  aesthetic gain; phase 5's loadout-library work can do it properly).
+- **Interrupt assignments deferred to phase 5.** Not in the phase-4
+  checklist ("full call palette" is phase 5); hold DPS is the phase-4
+  depth mechanic. Rejected: add-cast interrupt machinery now.
+- **Live calls implemented as deterministic re-runs** (append the timed
+  call, replay the same seed — past identical, future diverges) rather
+  than an incremental/streaming sim loop. Purity is the whole point of
+  the engine; a second stepping mode would be a standing bug farm.
+
+**Slice 1 (party fight core):**
+
+- **Solo fights keep drawing from the fight's main RNG stream; party
+  members each get `rng.fork('char:<id>')`.** The only way to keep the
+  pre-party streams byte-identical AND make party rolls independent
+  (adding a member never perturbs the others). Rejected: forking for the
+  solo path too (breaks every existing stream/tuning number).
+- **Threat model: damage × `ability.threatMult` feeds the struck enemy's
+  table; effective healing feeds EVERY enemy at 0.5×; a fresh add with an
+  empty table goes for the most recent healer** (healer aggro is real and
+  gives the tank's AoE-threat kit a job in slice 2), falling back to the
+  first living member. Rejected: adds defaulting to the tank (kills the
+  add-pickup decision entirely — nothing to plan around).
+- **Boss timeline abilities now hit every living party member** (the GDD
+  §4 type-2 "group-wide damage demands planned heal CDs" reading); solo
+  = party of one, so nothing changed for existing bosses. Rejected:
+  random-target timeline hits (adds RNG the heal check doesn't need).
+- **Party wipe analysis explains the LAST death** (the wipe moment) with
+  that character's own potion/threshold. Rejected: per-character wipe
+  notes (deferred until the web review shows per-char detail, slice 3).
+- **Heal decision scoring skips targets above 95% HP** so healers never
+  spam full-HP heals; group heal beats single heal via a 1.6× breadth
+  boost on average deficit. Placeholder balance, tuned in slice 2.
 
 ## Environment notes
 

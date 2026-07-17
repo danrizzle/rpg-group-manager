@@ -25,10 +25,13 @@ export function installPack(fight: Fight): void {
     const swing = (): void => {
       if (fight.ended !== null || !mob.alive) return;
       const amount = mdef.meleeDamage * (1 + rng.range(-0.15, 0.15));
-      fight.damagePlayer(amount, mdef.meleeDamageType, mob.id, {
-        abilityId: 'melee',
-        damageType: mdef.meleeDamageType,
-      });
+      const target = fight.pickTarget(mob.id);
+      if (target) {
+        fight.damageChar(target, amount, mdef.meleeDamageType, mob.id, {
+          abilityId: 'melee',
+          damageType: mdef.meleeDamageType,
+        });
+      }
       fight.scheduler.in(jitter(mdef.meleeSwingMs), swing);
     };
     fight.scheduler.in(jitter(mdef.meleeSwingMs), swing);

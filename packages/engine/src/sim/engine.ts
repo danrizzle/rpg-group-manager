@@ -8,7 +8,7 @@ import type { MobDefinition, MobPackDefinition } from '../model/mobPack';
 import type { EquippedConsumable } from '../model/consumable';
 import { hasteMult, type BehaviorStats, type CombatStats } from '../model/stats';
 import { validateStance, type StanceConfig } from '../model/stance';
-import { chooseAction, shouldUseBurst } from './decision';
+import { chooseAction, shouldUseBurst, type AllyView } from './decision';
 import {
   hesitationDelayMs,
   reactionTimeMs,
@@ -18,8 +18,14 @@ import {
 import { installBoss } from './bossScript';
 import { installPack } from './packScript';
 
+export type CharacterRole = 'tank' | 'healer' | 'dps';
+
 export interface CharacterDef {
+  /** Actor id in the event stream. Absent = the solo PLAYER_ID. */
+  id?: string;
   name: string;
+  /** Trinity role (party fights); informational — behavior comes from the kit. */
+  role?: CharacterRole;
   stats: CombatStats;
   behavior: BehaviorStats;
   /** Full kit including the potion (tag 'consumable', offGcd). */
@@ -32,18 +38,30 @@ export interface CharacterDef {
   consumables?: EquippedConsumable[];
 }
 
+/** One party slot: who fights and under which intent (GDD §3 — per character). */
+export interface PartyMember {
+  character: CharacterDef;
+  stance: StanceConfig;
+}
+
 /**
  * A fight runs exactly one encounter: a boss (single enemy + mechanics,
  * ends when the boss dies) or a mob pack (2–3 enemies from t=0, ends when
- * all are dead). Provide exactly one of `boss` / `pack`.
+ * all are dead). Provide exactly one of `boss` / `pack`, and exactly one of
+ * `player`+`stance` (solo — the pre-party path, byte-identical streams) /
+ * `party` (each member carries their own stance).
  */
 export interface FightSetup {
-  player: CharacterDef;
+  player?: CharacterDef;
+  stance?: StanceConfig;
+  party?: PartyMember[];
   boss?: BossDefinition;
   pack?: MobPackDefinition;
-  stance: StanceConfig;
   seed: number;
 }
+
+/** A solo setup with the legacy fields guaranteed present (tests, grind sims). */
+export type SoloFightSetup = FightSetup & { player: CharacterDef; stance: StanceConfig };
 
 export type EndCondition = 'bossDead' | 'allEnemiesDead';
 
@@ -57,6 +75,9 @@ export interface FightResult {
 
 const MAX_FIGHT_MS = 600_000;
 const DAMAGE_VARIANCE = 0.15;
+/** Threat generated per point of effective healing (applied to every enemy). */
+const HEAL_THREAT_COEFF = 0.5;
+export const MAX_PARTY_SIZE = 5;
 
 export const PLAYER_ID = 'player';
 export const BOSS_ID = 'boss';
@@ -75,6 +96,23 @@ export function enemyStats(hp: number): CombatStats {
   };
 }
 
+/**
+ * Runtime state of one party character. Solo fights draw from the fight's
+ * main RNG stream (byte-identity with the pre-party engine); party members
+ * each get an independent fork so adding a character never perturbs the
+ * others' rolls.
+ */
+export interface CharState {
+  def: CharacterDef;
+  stance: StanceConfig;
+  actor: Actor;
+  rng: Rng;
+  moving: boolean;
+  potionPending: boolean;
+  /** abilityId → remaining uses, for abilities with chargesPerFight. */
+  chargesLeft: Map<string, number>;
+}
+
 /** One rolled run. Pure function of (setup, seed) — bit-identical everywhere. */
 export function runFight(setup: FightSetup): FightResult {
   return new Fight(setup).run();
@@ -84,7 +122,8 @@ export class Fight {
   readonly scheduler = new Scheduler();
   readonly log = new EventLog();
   readonly rng: Rng;
-  readonly player: Actor;
+  /** The party (a solo fight is a party of one legacy character). */
+  readonly chars: CharState[] = [];
   /** The boss actor for boss encounters; null for pack encounters. */
   readonly boss: Actor | null;
   /** Enemies present from t=0 (the boss, or each mob of a pack). */
@@ -96,23 +135,61 @@ export class Fight {
   /** actorId → mob definition, for pack encounters (XP attribution). */
   readonly mobDefs = new Map<string, MobDefinition>();
 
+  /** enemyId → (charId → threat). Damage feeds one table; healing feeds all. */
+  private readonly threat = new Map<string, Map<string, number>>();
+  private lastHealer: CharState | null = null;
+
   ended: FightResultKind | null = null;
   enraged = false;
   /** Ids of adds that outlived the tantrum timer and still live. */
   readonly overdueAdds = new Set<string>();
-  playerMoving = false;
-  private potionPending = false;
-  /** abilityId → remaining uses, for abilities with chargesPerFight. */
-  private readonly chargesLeft = new Map<string, number>();
 
   constructor(setup: FightSetup) {
-    validateStance(setup.stance);
     if (setup.boss && setup.pack) {
       throw new Error('fight needs exactly one of boss / pack, not both');
     }
+    if (setup.player && setup.party) {
+      throw new Error('fight needs exactly one of player / party, not both');
+    }
     this.setup = setup;
     this.rng = new Rng(setup.seed);
-    this.player = new Actor(PLAYER_ID, setup.player.name, 'players', setup.player.stats);
+
+    if (setup.player) {
+      if (!setup.stance) throw new Error('solo fight needs a stance');
+      validateStance(setup.stance);
+      this.chars.push({
+        def: setup.player,
+        stance: setup.stance,
+        actor: new Actor(PLAYER_ID, setup.player.name, 'players', setup.player.stats),
+        // Legacy solo path: the main stream, exactly as before parties.
+        rng: this.rng,
+        moving: false,
+        potionPending: false,
+        chargesLeft: new Map(),
+      });
+    } else if (setup.party) {
+      if (setup.party.length < 1 || setup.party.length > MAX_PARTY_SIZE) {
+        throw new Error(`party size must be 1..${MAX_PARTY_SIZE}`);
+      }
+      const seen = new Set<string>();
+      for (const [i, member] of setup.party.entries()) {
+        validateStance(member.stance);
+        const id = member.character.id ?? `p${i + 1}`;
+        if (seen.has(id)) throw new Error(`duplicate party member id: ${id}`);
+        seen.add(id);
+        this.chars.push({
+          def: member.character,
+          stance: member.stance,
+          actor: new Actor(id, member.character.name, 'players', member.character.stats),
+          rng: this.rng.fork(`char:${id}`),
+          moving: false,
+          potionPending: false,
+          chargesLeft: new Map(),
+        });
+      }
+    } else {
+      throw new Error('fight needs a player or a party');
+    }
 
     if (setup.boss) {
       this.boss = new Actor(BOSS_ID, setup.boss.name, 'enemies', enemyStats(setup.boss.hp));
@@ -132,20 +209,40 @@ export class Fight {
   }
 
   run(): FightResult {
+    // Party fights document their roster in the stream (metrics, replays and
+    // reviews reconstruct the player side from `join` events alone). The solo
+    // path emits none — pre-party streams stay byte-identical.
+    if (this.setup.party) {
+      for (const c of this.chars) {
+        this.emit({
+          type: 'join',
+          source: c.actor.id,
+          meta: {
+            name: c.def.name,
+            maxHp: c.def.stats.maxHp,
+            ...(c.def.role ? { role: c.def.role } : {}),
+          },
+        });
+      }
+    }
     // Equipped passive consumables are stream-visible from t=0 (their stats
     // were folded at build time; no expiry — they last the whole fight).
-    for (const c of this.setup.player.consumables ?? []) {
-      if (c.kind !== 'passive') continue;
-      this.emit({
-        type: 'buffApplied',
-        source: PLAYER_ID,
-        target: PLAYER_ID,
-        meta: { buffId: c.id, consumable: true },
-      });
+    for (const c of this.chars) {
+      for (const eq of c.def.consumables ?? []) {
+        if (eq.kind !== 'passive') continue;
+        this.emit({
+          type: 'buffApplied',
+          source: c.actor.id,
+          target: c.actor.id,
+          meta: { buffId: eq.id, consumable: true },
+        });
+      }
     }
     if (this.setup.boss) installBoss(this);
     else installPack(this);
-    this.scheduler.at(0, () => this.decide());
+    for (const c of this.chars) {
+      this.scheduler.at(0, () => this.decide(c));
+    }
     this.scheduler.at(MAX_FIGHT_MS, () => this.end('timeout'));
     this.scheduler.run(() => this.ended !== null);
     return {
@@ -169,139 +266,217 @@ export class Fight {
     return [...this.enemies, ...this.adds].filter((a) => a.alive);
   }
 
-  // ---- Player action cycle -------------------------------------------------
+  livingChars(): CharState[] {
+    return this.chars.filter((c) => c.actor.alive);
+  }
 
-  private decide(): void {
-    if (this.ended !== null || !this.player.alive) return;
+  // ---- Threat ---------------------------------------------------------------
+
+  private addThreat(enemyId: string, charId: string, amount: number): void {
+    let table = this.threat.get(enemyId);
+    if (!table) {
+      table = new Map();
+      this.threat.set(enemyId, table);
+    }
+    table.set(charId, (table.get(charId) ?? 0) + amount);
+  }
+
+  /**
+   * Who an enemy attacks: its top living threat. A fresh table (a just-spawned
+   * add) goes for the most recent healer — classic aggro drama the tank
+   * answers with AoE threat — falling back to the first living member.
+   */
+  pickTarget(enemyId: string): CharState | null {
+    const table = this.threat.get(enemyId);
+    let best: CharState | null = null;
+    let bestVal = 0;
+    if (table) {
+      for (const c of this.chars) {
+        if (!c.actor.alive) continue;
+        const v = table.get(c.actor.id) ?? 0;
+        if (v > bestVal) {
+          best = c;
+          bestVal = v;
+        }
+      }
+    }
+    if (best) return best;
+    if (this.lastHealer?.actor.alive) return this.lastHealer;
+    return this.livingChars()[0] ?? null;
+  }
+
+  // ---- Character action cycle ----------------------------------------------
+
+  private decide(char: CharState): void {
+    if (this.ended !== null || !char.actor.alive) return;
     const now = this.scheduler.now;
-    const { stance, player } = this.setup;
-    const kit = player.abilities;
+    const { stance, def } = char;
+    const kit = def.abilities;
 
     // Off-GCD burst cooldowns fire outside the cycle.
     if (shouldUseBurst(stance)) {
       for (const a of kit) {
-        if (a.offGcd && a.tags.includes('burst') && this.player.isReady(a, now)) {
-          this.resolveAbility(a);
+        if (a.offGcd && a.tags.includes('burst') && char.actor.isReady(a, now)) {
+          this.resolveAbility(char, a);
         }
       }
     }
 
     const ready = kit.filter(
-      (a) => !a.offGcd && !a.tags.includes('consumable') && this.player.isReady(a, now),
+      (a) => !a.offGcd && !a.tags.includes('consumable') && char.actor.isReady(a, now),
     );
+    const allies: AllyView[] | undefined = this.setup.party
+      ? this.livingChars().map((c) => ({ id: c.actor.id, hpPct: c.actor.hpPct }))
+      : undefined;
     let choice = chooseAction({
       ready,
       stance,
-      stats: player.stats,
-      behavior: player.behavior,
-      hpPct: this.player.hpPct,
+      stats: def.stats,
+      behavior: def.behavior,
+      hpPct: char.actor.hpPct,
       livingEnemies: this.livingEnemies().length,
-      moving: this.playerMoving,
+      moving: char.moving,
+      ...(allies ? { allies } : {}),
     });
     if (choice === null) {
-      this.scheduler.in(GCD_MS, () => this.decide());
+      this.scheduler.in(GCD_MS, () => this.decide(char));
       return;
     }
 
-    const mistake = rollDecisionMistake(this.rng, player.behavior.discipline);
+    const mistake = rollDecisionMistake(char.rng, def.behavior.discipline);
     if (mistake === 'hesitation') {
-      const delay = hesitationDelayMs(this.rng);
+      const delay = hesitationDelayMs(char.rng);
       this.emit({
         type: 'mistake',
-        source: PLAYER_ID,
+        source: char.actor.id,
         meta: { kind: 'hesitation', delayMs: delay },
       });
-      this.scheduler.in(delay, () => this.decide());
+      this.scheduler.in(delay, () => this.decide(char));
       return;
     }
     if (mistake === 'wrong-ability' && ready.length > 1) {
-      const wrong = this.rng.pick(ready.filter((a) => a !== choice));
+      const wrong = char.rng.pick(ready.filter((a) => a !== choice));
       this.emit({
         type: 'mistake',
-        source: PLAYER_ID,
+        source: char.actor.id,
         meta: { kind: 'wrong-ability', chose: wrong.id, insteadOf: choice.id },
       });
       choice = wrong;
     }
 
-    this.castAbility(choice);
+    this.castAbility(char, choice);
   }
 
-  private castAbility(ability: Ability): void {
-    const haste = hasteMult(this.setup.player.stats);
+  private castAbility(char: CharState, ability: Ability): void {
+    const haste = hasteMult(char.def.stats);
     const castMs = Math.round(ability.castTimeMs * haste);
-    this.emit({ type: 'castStart', source: PLAYER_ID, meta: { abilityId: ability.id } });
+    this.emit({ type: 'castStart', source: char.actor.id, meta: { abilityId: ability.id } });
     const finish = () => {
-      if (this.ended !== null || !this.player.alive) return;
-      this.resolveAbility(ability);
-      this.decide();
+      if (this.ended !== null || !char.actor.alive) return;
+      this.resolveAbility(char, ability);
+      this.decide(char);
     };
     // Instants still occupy the GCD; casts of >= GCD length resolve at cast end.
     this.scheduler.in(Math.max(castMs, Math.round(GCD_MS * haste)), finish);
   }
 
   /** Remaining uses for a charge-limited ability; Infinity when unlimited. */
-  private charges(ability: Ability): number {
+  private charges(char: CharState, ability: Ability): number {
     if (ability.chargesPerFight === undefined) return Infinity;
-    return this.chargesLeft.get(ability.id) ?? ability.chargesPerFight;
+    return char.chargesLeft.get(ability.id) ?? ability.chargesPerFight;
   }
 
   /** Apply an ability's effect now and start its cooldown. */
-  resolveAbility(ability: Ability): void {
+  resolveAbility(char: CharState, ability: Ability): void {
     const now = this.scheduler.now;
     if (ability.chargesPerFight !== undefined) {
-      this.chargesLeft.set(ability.id, this.charges(ability) - 1);
+      char.chargesLeft.set(ability.id, this.charges(char, ability) - 1);
     }
-    this.player.startCooldown(ability, now);
-    this.emit({ type: 'castEnd', source: PLAYER_ID, meta: { abilityId: ability.id } });
+    char.actor.startCooldown(ability, now);
+    this.emit({ type: 'castEnd', source: char.actor.id, meta: { abilityId: ability.id } });
     const effect = ability.effect;
 
     if (effect.kind === 'damage') {
+      const power =
+        effect.powerStat === 'attackPower' ? char.def.stats.attackPower : char.def.stats.spellPower;
       const targets = effect.aoe ? this.livingEnemies() : this.livingEnemies().slice(0, 1);
       for (const target of targets) {
-        let amount = effect.base + effect.coeff * this.setup.player.stats.spellPower;
-        if (effect.aoe) amount *= this.setup.player.behavior.aoeEfficiency;
-        if (this.playerMoving && ability.movementPenalty) {
-          amount *= this.setup.player.behavior.damageWhileMoving;
+        let amount = effect.base + effect.coeff * power;
+        if (effect.aoe) amount *= char.def.behavior.aoeEfficiency;
+        if (char.moving && ability.movementPenalty) {
+          amount *= char.def.behavior.damageWhileMoving;
         }
-        amount *= this.player.damageMult(now);
-        amount *= 1 + this.rng.range(-DAMAGE_VARIANCE, DAMAGE_VARIANCE);
-        const crit = this.rng.chance(this.player.critChance(now));
+        amount *= char.actor.damageMult(now);
+        amount *= 1 + char.rng.range(-DAMAGE_VARIANCE, DAMAGE_VARIANCE);
+        const crit = char.rng.chance(char.actor.critChance(now));
         if (crit) amount *= 2;
         const { dealt, absorbed } = target.takeDamage(amount, effect.damageType, now);
         this.emit({
           type: 'damage',
-          source: PLAYER_ID,
+          source: char.actor.id,
           target: target.id,
           value: dealt,
           meta: { abilityId: ability.id, damageType: effect.damageType, crit, ...(absorbed > 0 ? { absorbed } : {}) },
         });
+        this.addThreat(target.id, char.actor.id, dealt * (ability.threatMult ?? 1));
         this.onEnemyDamaged(target);
         if (this.ended !== null) return;
       }
     } else if (effect.kind === 'heal') {
-      const healed = this.player.heal(effect.base + effect.coeff * this.setup.player.stats.healingPower);
-      this.emit({
-        type: 'heal',
-        source: PLAYER_ID,
-        target: PLAYER_ID,
-        value: healed,
-        meta: { abilityId: ability.id },
-      });
-    } else {
-      this.player.applyBuff(effect, now);
-      this.emit({
-        type: 'buffApplied',
-        source: PLAYER_ID,
-        target: PLAYER_ID,
-        meta: { buffId: effect.buffId, abilityId: ability.id },
-      });
-      this.scheduler.in(effect.durationMs, () => {
-        for (const buffId of this.player.expireBuffs(this.scheduler.now)) {
-          this.emit({ type: 'buffExpired', source: PLAYER_ID, target: PLAYER_ID, meta: { buffId } });
+      const targets = this.healTargets(char, effect.target ?? 'self');
+      let totalHealed = 0;
+      for (const target of targets) {
+        const healed = target.actor.heal(effect.base + effect.coeff * char.def.stats.healingPower);
+        totalHealed += healed;
+        this.emit({
+          type: 'heal',
+          source: char.actor.id,
+          target: target.actor.id,
+          value: healed,
+          meta: { abilityId: ability.id },
+        });
+      }
+      // Effective healing threatens every living enemy — healer aggro is real.
+      if (totalHealed > 0) {
+        for (const enemy of this.livingEnemies()) {
+          this.addThreat(enemy.id, char.actor.id, totalHealed * HEAL_THREAT_COEFF);
         }
-      });
+      }
+      this.lastHealer = char;
+    } else {
+      const targets =
+        (effect.target ?? 'self') === 'party' ? this.livingChars() : [char];
+      for (const target of targets) {
+        target.actor.applyBuff(effect, now);
+        this.emit({
+          type: 'buffApplied',
+          source: char.actor.id,
+          target: target.actor.id,
+          meta: { buffId: effect.buffId, abilityId: ability.id },
+        });
+        this.scheduler.in(effect.durationMs, () => {
+          for (const buffId of target.actor.expireBuffs(this.scheduler.now)) {
+            this.emit({
+              type: 'buffExpired',
+              source: target.actor.id,
+              target: target.actor.id,
+              meta: { buffId },
+            });
+          }
+        });
+      }
     }
+  }
+
+  private healTargets(char: CharState, mode: 'self' | 'lowest-ally' | 'party'): CharState[] {
+    if (mode === 'self') return [char];
+    const living = this.livingChars();
+    if (mode === 'party') return living;
+    let lowest = char;
+    for (const c of living) {
+      if (c.actor.hpPct < lowest.actor.hpPct) lowest = c;
+    }
+    return [lowest];
   }
 
   private onEnemyDamaged(target: Actor): void {
@@ -346,52 +521,66 @@ export class Fight {
 
   // ---- Incoming damage -----------------------------------------------------
 
-  /** Boss script routes all player-directed damage through here. */
-  damagePlayer(amount: number, type: Parameters<Actor['takeDamage']>[1], source: string, meta: Record<string, unknown>): void {
-    if (this.ended !== null || !this.player.alive) return;
+  /** Boss/pack scripts route all character-directed damage through here. */
+  damageChar(
+    char: CharState,
+    amount: number,
+    type: Parameters<Actor['takeDamage']>[1],
+    source: string,
+    meta: Record<string, unknown>,
+  ): void {
+    if (this.ended !== null || !char.actor.alive) return;
     const now = this.scheduler.now;
-    const { dealt, absorbed } = this.player.takeDamage(amount, type, now);
+    const { dealt, absorbed } = char.actor.takeDamage(amount, type, now);
     this.emit({
       type: 'damage',
       source,
-      target: PLAYER_ID,
+      target: char.actor.id,
       value: dealt,
       meta: { ...meta, ...(absorbed > 0 ? { absorbed } : {}) },
     });
-    if (!this.player.alive) {
-      this.emit({ type: 'death', source: PLAYER_ID, meta: { killedBy: meta['abilityId'] ?? source } });
-      this.end(this.enraged ? 'enrage' : 'playerDeath');
+    if (!char.actor.alive) {
+      this.emit({
+        type: 'death',
+        source: char.actor.id,
+        meta: { killedBy: meta['abilityId'] ?? source },
+      });
+      // The fight is lost only when the whole party is down (a solo fight is
+      // a party of one, so the pre-party semantics are unchanged).
+      if (this.livingChars().length === 0) {
+        this.end(this.enraged ? 'enrage' : 'playerDeath');
+      }
       return;
     }
-    this.maybeSchedulePotion();
+    this.maybeSchedulePotion(char);
   }
 
   /**
    * Reactive potion use (GDD §3 slider): when HP crosses the threshold the
    * character notices after their reaction time — discipline made visible.
    */
-  private maybeSchedulePotion(): void {
-    const { stance, player } = this.setup;
+  private maybeSchedulePotion(char: CharState): void {
+    const { stance, def } = char;
     // v1: at most one distinct active consumable exists (healing-potion), so
     // `find` suffices; revisit when a second active kind joins the catalog.
-    const potion = player.abilities.find((a) => a.tags.includes('consumable'));
-    if (!potion || this.potionPending) return;
-    if (this.player.hpPct * 100 >= stance.potionThresholdPct) return;
-    if (this.charges(potion) <= 0) return;
-    if (!this.player.isReady(potion, this.scheduler.now)) return;
+    const potion = def.abilities.find((a) => a.tags.includes('consumable'));
+    if (!potion || char.potionPending) return;
+    if (char.actor.hpPct * 100 >= stance.potionThresholdPct) return;
+    if (this.charges(char, potion) <= 0) return;
+    if (!char.actor.isReady(potion, this.scheduler.now)) return;
 
-    this.potionPending = true;
-    const slow = rollSlowPotionMs(this.rng, player.behavior.discipline);
+    char.potionPending = true;
+    const slow = rollSlowPotionMs(char.rng, def.behavior.discipline);
     if (slow > 0) {
-      this.emit({ type: 'mistake', source: PLAYER_ID, meta: { kind: 'slow-potion', delayMs: slow } });
+      this.emit({ type: 'mistake', source: char.actor.id, meta: { kind: 'slow-potion', delayMs: slow } });
     }
-    this.scheduler.in(reactionTimeMs(player.behavior.discipline) + slow, () => {
-      this.potionPending = false;
-      if (this.ended !== null || !this.player.alive) return;
-      if (this.player.hpPct * 100 >= stance.potionThresholdPct) return;
-      if (this.charges(potion) <= 0) return;
-      if (!this.player.isReady(potion, this.scheduler.now)) return;
-      this.resolveAbility(potion);
+    this.scheduler.in(reactionTimeMs(def.behavior.discipline) + slow, () => {
+      char.potionPending = false;
+      if (this.ended !== null || !char.actor.alive) return;
+      if (char.actor.hpPct * 100 >= stance.potionThresholdPct) return;
+      if (this.charges(char, potion) <= 0) return;
+      if (!char.actor.isReady(potion, this.scheduler.now)) return;
+      this.resolveAbility(char, potion);
     });
   }
 }

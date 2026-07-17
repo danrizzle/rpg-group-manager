@@ -10,8 +10,16 @@ export type { StanceConfig } from './model/stance';
 export type { AddDefinition, BossDefinition, TimedBossAbility } from './model/boss';
 export type { MobDefinition, MobPackDefinition } from './model/mobPack';
 export { packBandMax } from './model/mobPack';
-export { runFight, PLAYER_ID, BOSS_ID, enemyStats } from './sim/engine';
-export type { CharacterDef, EndCondition, FightResult, FightResultKind, FightSetup } from './sim/engine';
+export { runFight, PLAYER_ID, BOSS_ID, MAX_PARTY_SIZE, enemyStats } from './sim/engine';
+export type {
+  CharacterDef,
+  CharacterRole,
+  EndCondition,
+  FightResult,
+  FightResultKind,
+  FightSetup,
+  PartyMember,
+} from './sim/engine';
 export { reactionTimeMs, mistakeChance } from './sim/mistakes';
 export { applyGear, foldBonuses } from './model/item';
 export type { GearSlot, Item, ItemBonuses } from './model/item';
@@ -56,8 +64,8 @@ export {
   makeAshenFoothillsPack,
   makeCinderWastesPack,
 } from './content/mobs/zones';
-export { summarizeRun, fightReview, formatEvents } from './analysis/metrics';
-export type { FightReview, PotionNote, RunSummary, WipeAnalysis } from './analysis/metrics';
+export { summarizeRun, fightReview, formatEvents, playerIdsOf } from './analysis/metrics';
+export type { CharacterSummary, FightReview, PotionNote, RunSummary, WipeAnalysis } from './analysis/metrics';
 export { runMonteCarlo } from './analysis/montecarlo';
 export type { MonteCarloResult } from './analysis/montecarlo';
 export { grindRates, riskTier, devalue, DEFAULT_PULL_CYCLE } from './analysis/grind';
