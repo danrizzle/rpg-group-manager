@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { buildLog, mmss, Replay, type ActorView } from '../fight/replay';
 import { useStore } from '../store';
+import type { BossId } from '../world/types';
 
 const BUFF_NAMES: Record<string, string> = {
   combustion: 'Combustion',
@@ -42,6 +43,7 @@ export function FightView() {
   const playing = useStore((s) => s.playing);
   const speed = useStore((s) => s.speed);
   const setPlayback = useStore((s) => s.setPlayback);
+  const recordBossKill = useStore((s) => s.recordBossKill);
   const logRef = useRef<HTMLDivElement>(null);
 
   const replay = useMemo(
@@ -71,6 +73,12 @@ export function FightView() {
   }, [playing, speed, fight, setPlayback]);
 
   const view = replay?.seek(playT) ?? null;
+
+  // A zone boss unlocks the next region once its kill has been watched to the end.
+  useEffect(() => {
+    if (view?.ended === 'kill' && fight) recordBossKill(fight.bossId as BossId);
+  }, [view?.ended, fight, recordBossKill]);
+
   const visibleLog = useMemo(() => {
     const upTo = log.filter((l) => l.t <= playT);
     return upTo.slice(-100);
@@ -88,7 +96,7 @@ export function FightView() {
           One rolled run — same setup, different outcome every pull. Costs time (and later, consumables); the
           training dummy on the right is free.
         </p>
-        <button className="btn btn-primary" onClick={pull}>
+        <button className="btn btn-primary" onClick={() => pull()}>
           Pull Cinder Maw
         </button>
       </section>
@@ -103,9 +111,9 @@ export function FightView() {
   return (
     <section className="panel fight-panel">
       <div className="fight-header">
-        <h2>Real Fight</h2>
+        <h2>{fight.boss.name}</h2>
         <span className="muted">seed {fight.seed}</span>
-        <button className="btn" onClick={pull}>
+        <button className="btn" onClick={() => pull(fight.bossId)}>
           Pull again
         </button>
       </div>

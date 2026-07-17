@@ -1,8 +1,14 @@
 import {
+  LEVEL_CAP,
+  UNLOCKS,
+  intentsUpToLevel,
   itemsForSlot,
+  levelForXp,
   makeMage,
   mistakeChance,
   reactionTimeMs,
+  totalXpToReach,
+  xpToNext,
   type GearSlot,
   type ItemBonuses,
 } from '@rpg/engine';
@@ -15,6 +21,11 @@ const SLOTS: { slot: GearSlot; label: string }[] = [
   { slot: 'ring', label: 'Ring' },
   { slot: 'trinket', label: 'Trinket' },
 ];
+
+/** Intent id → the level it unlocks at (from the engine's unlock arc). */
+const INTENT_LEVEL: Record<string, number> = Object.fromEntries(
+  UNLOCKS.flatMap((u) => u.intents.map((i) => [i, u.level])),
+);
 
 function bonusText(b: ItemBonuses): string {
   const parts: string[] = [];
@@ -65,14 +76,35 @@ export function CharacterPanel() {
   const applyAutoPreset = useStore((s) => s.applyAutoPreset);
   const gear = useStore((s) => s.gear);
   const setGear = useStore((s) => s.setGear);
-  const mage = useMemo(() => makeMage(behavior, resolveGear(gear)), [behavior, gear]);
+  const xp = useStore((s) => s.xp);
+  const level = levelForXp(xp);
+  const mage = useMemo(() => makeMage(behavior, resolveGear(gear), level), [behavior, gear, level]);
 
   const activeStance = STANCES.find((st) => st.offense === stance.offense);
   const fireRes = mage.stats.resistances.fire ?? 0;
 
+  const intents = new Set(intentsUpToLevel(level));
+  const nextUnlock = UNLOCKS.find((u) => u.level > level);
+  const targetsUnlocked = intents.has('target-steps');
+  const potionUnlocked = intents.has('potion-threshold');
+  const burstUnlocked = intents.has('burst-cd-control');
+
+  // XP bar: progress within the current level (cap shows full).
+  const atCap = level >= LEVEL_CAP;
+  const into = xp - totalXpToReach(level);
+  const span = xpToNext(level);
+  const xpPct = atCap ? 100 : Math.max(0, Math.min(100, (into / span) * 100));
+
   return (
     <section className="panel">
       <h2>Elara the Mage</h2>
+      <div className="statline">
+        Level {level}
+        {atCap ? ' · MAX' : ` · ${Math.floor(into)} / ${span} XP`}
+      </div>
+      <div className="bar">
+        <div className="bar-fill bar-xp" style={{ width: `${xpPct}%` }} />
+      </div>
       <div className="statline">
         {mage.stats.maxHp} HP · {mage.stats.spellPower} SP · {Math.round(mage.stats.critChance * 100)}% crit
         {mage.stats.hastePct > 0 && ` · ${mage.stats.hastePct}% haste`}
@@ -89,15 +121,20 @@ export function CharacterPanel() {
       <div className="control">
         <div className="control-label">Stance</div>
         <div className="segmented">
-          {STANCES.map((st) => (
-            <button
-              key={st.id}
-              className={`btn btn-small ${st.offense === stance.offense ? 'btn-active' : ''}`}
-              onClick={() => setStance({ offense: st.offense })}
-            >
-              {st.label}
-            </button>
-          ))}
+          {STANCES.map((st) => {
+            const locked = !intents.has(st.intent);
+            return (
+              <button
+                key={st.id}
+                className={`btn btn-small ${st.offense === stance.offense ? 'btn-active' : ''}`}
+                disabled={locked}
+                title={locked ? `Unlocks at level ${INTENT_LEVEL[st.intent]}` : st.desc}
+                onClick={() => setStance({ offense: st.offense })}
+              >
+                {st.label}
+              </button>
+            );
+          })}
         </div>
         <div className="control-desc">{activeStance?.desc ?? 'Custom (set via dev tools)'}</div>
       </div>
@@ -109,18 +146,21 @@ export function CharacterPanel() {
             <button
               key={t.label}
               className={`btn btn-small ${t.value === stance.targeting ? 'btn-active' : ''}`}
+              disabled={!targetsUnlocked}
               onClick={() => setStance({ targeting: t.value })}
             >
               {t.label}
             </button>
           ))}
         </div>
+        {!targetsUnlocked && <div className="control-desc">locked — unlocks at level {INTENT_LEVEL['target-steps']}</div>}
       </div>
 
       <div className="control">
         <div className="control-label">Use potion</div>
         <select
           value={stance.potionThresholdPct}
+          disabled={!potionUnlocked}
           onChange={(e) => setStance({ potionThresholdPct: Number(e.target.value) })}
         >
           {POTION_STEPS.map((p) => (
@@ -129,13 +169,16 @@ export function CharacterPanel() {
             </option>
           ))}
         </select>
+        {!potionUnlocked && <div className="control-desc">locked — unlocks at level {INTENT_LEVEL['potion-threshold']}</div>}
       </div>
 
       <div className="control">
         <div className="control-label">Burst CDs</div>
         <select value={stance.burstCds} disabled>
           <option value="automatic">automatic</option>
-          <option value="save-for-plan-window">save for plan window (locked)</option>
+          <option value="save-for-plan-window">
+            {burstUnlocked ? 'save for plan window' : `save for plan window (Lv ${INTENT_LEVEL['burst-cd-control']})`}
+          </option>
         </select>
       </div>
 
@@ -204,6 +247,11 @@ export function CharacterPanel() {
           </li>
         ))}
       </ul>
+      {nextUnlock && (
+        <p className="muted">
+          Next at level {nextUnlock.level}: {[...nextUnlock.abilities, ...nextUnlock.intents].join(', ')}
+        </p>
+      )}
     </section>
   );
 }

@@ -1,3 +1,4 @@
+import { levelForXp } from '@rpg/engine';
 import { simIsStale, useStore } from '../store';
 import { mmss } from '../fight/replay';
 import { Histogram } from './Histogram';
@@ -21,7 +22,8 @@ export function ReviewPanel() {
   const stance = useStore((s) => s.stance);
   const behavior = useStore((s) => s.behavior);
   const gear = useStore((s) => s.gear);
-  const stale = simIsStale(sim, stance, behavior, gear);
+  const xp = useStore((s) => s.xp);
+  const stale = simIsStale(sim, stance, behavior, gear, levelForXp(xp));
   const r = sim.result;
 
   return (

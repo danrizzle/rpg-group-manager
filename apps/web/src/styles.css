@@ -129,6 +129,8 @@ body {
 .bar-fill { height: 100%; transition: width 80ms linear; }
 .bar-player { background: var(--hp-player); }
 .bar-enemy { background: var(--hp-enemy); }
+.bar-xp { background: linear-gradient(180deg, #d9a441, #8a6a2c); }
+.bar-task { background: linear-gradient(180deg, #7fa3c7, #4a6a8c); }
 .adds { margin-left: 24px; }
 .spacer { height: 10px; }
 
@@ -188,3 +190,40 @@ body {
 .hist-label { fill: var(--muted); font-size: 9px; }
 .hist-label-mean { fill: var(--ink-2); }
 .hist-tooltip { min-height: 16px; color: var(--ink-2); font-size: 12px; }
+
+/* World map (slice 3) */
+.topbar-nav { margin-left: auto; }
+.columns-map { grid-template-columns: 290px 1fr; }
+@media (max-width: 1000px) { .columns-map { grid-template-columns: 1fr; } }
+
+.map-panel .fight-header { align-items: baseline; }
+
+.queue-strip { margin: 10px 0; }
+.queue-item { margin: 6px 0; }
+.queue-active .queue-row span { color: var(--gold); }
+.queue-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.queue-row .btn-small { padding: 1px 7px; }
+
+.region-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+@media (max-width: 640px) { .region-grid { grid-template-columns: 1fr; } }
+.region-card { padding: 12px 14px; }
+.region-locked { opacity: 0.62; }
+.region-here { border-color: var(--gold-dim); }
+.region-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.region-name { color: var(--ink); font-weight: 600; flex: 1; }
+.region-rates { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; min-height: 20px; }
+.region-xp { color: var(--gold); font-variant-numeric: tabular-nums; }
+.region-gate { min-height: 20px; margin-bottom: 10px; font-size: 12px; }
+.region-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(6, 4, 2, 0.72);
+  display: flex; align-items: center; justify-content: center; z-index: 20;
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 8px;
+  padding: 18px 22px; max-width: 420px; width: 90%;
+}
+.modal h2 { margin: 0 0 6px; color: var(--gold); }
+.away-list { list-style: none; margin: 12px 0 16px; padding: 0; }
+.away-list li { padding: 4px 0; border-bottom: 1px solid var(--panel-edge); color: var(--ink-2); }
