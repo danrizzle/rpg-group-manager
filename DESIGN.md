@@ -1,8 +1,9 @@
 # RPG Group Manager — Game Design Document
 
-> Working title. As of July 2026 · Version 0.3 (phase 1 engine + phase 2 prototype built)
+> Working title. As of July 2026 · Version 0.4 (phase 1 engine + phase 2 prototype built, phase 3 in progress)
 > New in 0.2: Raid Leader mode (live calls), human factor (familiarity, simulated mistakes), extended mechanics catalog, complexity staging, sharpened MVP.
 > New in 0.3: The progression economy (gear & knowledge as two currencies, outgearing law, per-difficulty tuning targets); behavior controls reworked from continuous sliders to **named intent stances + earned execution stats** (prototype learning: continuous dials felt like knob-fiddling and could never be plan building blocks).
+> New in 0.4: **Level system (cap 10) with the unlock arc as tutorial; the v1 world (four regions) with leveling zones; sim-derived XP/hour grinding with death risk and overlevel devaluation; region gates (zone boss / access building / lethality).**
 
 ---
 
@@ -81,6 +82,25 @@ On top of that come **damage types & resistances**: bosses deal typed damage (fi
 
 Behavior stats come from talents, special gear and training — they are the reason there is no "best" character, only the best one for *this* boss.
 
+### Levels & the Unlock Arc
+
+**Level cap 10 in v1** — expansions raise it. Levels scale the **naked base stats** (HP, spell/attack power); gear remains the dominant power axis on top. Concretely for the Mage: level 1 naked ≈ 30 SP / 1,200 HP, growing to level 10 naked = 60 SP / 2,100 HP — the current engine baseline *is* the level-10 character, so existing boss tuning is untouched.
+
+- **XP curve (placeholder, tunable):** `xpToNext(n) ≈ 100 · n^1.6`. Target pacing at an on-band zone: ~1–2 h of grinding per level early, ~3–4 h near cap. A dev time-multiplier exists for testing; real-time gating stays on acquisition per §1.
+- **Leveling is the tutorial (Law 1, §8).** New intents and abilities unlock along the arc, never more than one or two systems per step:
+
+| Level | Unlocks |
+|---|---|
+| 1 | Fireball · Balanced stance only |
+| 2 | Potion threshold control |
+| 3 | Guarded stance · Ice Barrier |
+| 4 | Target steps (Focus → Cleave) · Flamestrike |
+| 5 | Reckless stance · Fire Blast |
+| 7 | Combustion · burst-CD control |
+| 10 | Cap — dungeon-ready (phase 4 content) |
+
+Talents (separate section) arrive at cap in v1 — leveling teaches the intents; talents deepen them.
+
 ### The Human Factor: Characters Get Better, Not Just Stronger
 
 The second major progression axis besides gear — characters are simulated beings, not stat containers (the Football Manager principle):
@@ -138,7 +158,7 @@ Consumables: [Flask of Embers] [Fireproof Feast] [2× Healing Potion]
 
 - **Named states are plannable and callable.** "Phase 2: mages to Cleave" works as a boss-plan building block and as a live call — the same vocabulary in three forms (knowledge → levers, §8). A continuous dial ("mages to 0.7") never could; the prototype proved this by feel before the plan system existed.
 - **Base intents (from level 1):** stance (Reckless / Balanced / Guarded), targets (5 steps, Focus → Cleave), potion threshold (dropdown).
-- **Intents themselves are earned.** A fresh character knows only *Balanced*; talents unlock Reckless and Guarded, learning AoE spells unlocks the Cleave steps. Later policies ("save burst CD for…", "resource management conservative/aggressive") arrive as further discrete options — depth grows with the player without ever tipping into list maintenance.
+- **Intents themselves are earned.** A fresh character knows only *Balanced*; the base stances and target steps unlock along the level arc (§2 unlock table). Later policies ("save burst CD for…", "resource management conservative/aggressive") arrive via talents as further discrete options — depth grows with the player without ever tipping into list maintenance.
 - **Execution stats are the real progression:** AoE efficiency, damage while moving, discipline (§2) — earned, not configured. Two characters in the same stance perform differently; that difference is your roster's quality.
 - The refinement depth ("keep optimizing for more DPS") comes from the interplay of intents, execution stats, talents, gear, consumables, group comp and boss plan.
 
@@ -290,6 +310,30 @@ Purpose: roster and comp building becomes a per-boss puzzle (do I bring the four
 - Each region offers activities: combat content (bosses, dungeons), skilling spots (ore, herbs, …), quests.
 - **Expansions = new regions** with a new tier of content, materials and classes/mechanics.
 
+### The v1 World: Four Regions
+
+The launch world is a compact arc from level 1 to the cap, ending at the first dungeon's door. Each of the three gate mechanisms appears exactly once, deliberately:
+
+| # | Region (working names) | Level band | Gate to enter | Content |
+|---|---|---|---|---|
+| 1 | **Heartfield** | 1–3 | — (start) | Tutorial mobs (boars, bandits), herb spots, zone boss **Bandit Warlord** (type-1 lite: soft enrage) |
+| 2 | **Duskwood Edge** | 3–6 | Kill the Bandit Warlord | Wolves, spiders, mining spot — the bridge materials come from here |
+| 3 | **Ashen Foothills** | 6–9 | **Bridge** (access building; materials via a simple gather task — no professions required) | Fire-flavored mobs (fire resistance first matters here), zone boss **Emberwing** (type-2: movement phases) |
+| 4 | **Cinder Wastes** | 9–10 | Kill Emberwing — plus raw zone lethality (band 9–10 mobs shred underleveled characters) | Capstone single boss **Cinder Maw** (the existing test boss, now "the wall"), and the locked entrance to dungeon **Ember Forge** (phase-4 teaser) |
+
+- Travel between adjacent regions: 5–15 minutes real time (dev multiplier applies).
+- Zone bosses obey the dual-solubility law (§2): the Bandit Warlord's enrage is gear-soluble and mistake-soluble; Emberwing's movement phases reward damage-while-moving gear (Quickstep Anklet) *or* a Guarded, potion-early setup.
+- Expansions = new regions appended to this map (§5 above), never rescaled old ones.
+
+### Leveling: XP/hour, Risk & Devaluation
+
+Sending a character to level in a zone shows exactly two numbers: **XP/hour** and a **risk tier** (low / risky / deadly). Behind them, the combat sim stays the source of truth:
+
+- Each zone defines a representative **mob-pack encounter** (declarative, like bosses: 1–3 mobs with stats and a level band) plus `xpPerKill`.
+- **Rates are sim-derived, not hand-tuned:** a cheap, cached Monte Carlo of this character (gear, stances, earned stats) against the zone's mob pack — pull cycle = approach + fight + recovery downtime — yields kills/hour and deaths/hour. Gear scaling of XP/hour is therefore automatic, and better stances genuinely grind faster.
+- **Death is real:** a grinding session can end in death. XP earned up to that point is kept; the character returns home with a short recovery — time is the only cost (§3 wipe rules). "Too low level for the zone" needs no special rule: the sim simply kills you, which *is* the lethality gate.
+- **Overlevel devaluation — XP only, never power:** above the zone's band, `xpPerKill × max(0.1, 1 − 0.25 · (charLevel − bandMax))`. Outgeared farming of old zones for materials/loot stays fully effective (no-scaling law, §2); only the XP dries up, pushing leveling forward.
+
 ### Region Unlocks via Buildings
 
 Some regions and raids are locked until you erect an **access building** with resources — an outpost, a bridge, a portal. It works like a pre-quest: the group must first master the economy/region before the next content opens. Not every region needs this — use it deliberately at raids and tier transitions.
@@ -388,7 +432,7 @@ Each roster stage introduces **at most one or two new systems**; nothing new arr
 | Raid | Full call palette, loadout library, tank swaps | Affixes, Mythic |
 | Meta endgame | Difficulty tiers, modifiers, guild bosses | — |
 
-The UI follows **progressive disclosure** too: stances, call buttons and plan slots only appear once unlocked.
+The level 1–10 unlock arc (§2) is this law made concrete for the first stage. The UI follows **progressive disclosure** too: stances, call buttons and plan slots only appear once unlocked.
 
 ### Law 2: Defaults — Ignoring Works
 
@@ -427,7 +471,7 @@ The MVP is deliberately almost banal in size: **one character, the three base in
 
 1. **Combat sim engine** (pure module, no UI): stats, abilities, intent stances, event stream, one test boss with mechanic types 1–3, Monte Carlo sim with distribution output. Simulated mistakes + discipline stat in the model from the start (cheap now, expensive to retrofit). ✅ *built*
 2. **Browser prototype (= MVP):** 1 character + intent stances + training dummy + DPS/distribution review + real-time fight view (bars + log). ✅ *built*
-3. **Progression:** levels, talents, gear, professions, world map with travel & task queues, home base v1.
+3. **Progression:** gear ✅ · levels + zone grinding (§2 unlock arc, §5 XP/risk model) · world map with travel & task queues (v1 world, §5) · talents · professions · home base v1.
 4. **Group content:** 3–5-char dungeon, trinity, boss journal + discovery, boss plan timeline, group CDs, **first live calls (2–3 of them) + tactical pause + call→plan adoption**, boss familiarity, hold DPS, resistances.
 5. **Roster & raids:** 20-char roster, loadout library, full call palette (battle res, heal-CD chains, retreat), mechanic type 4 (tank swaps, dispels), tier-2 content with catalyst progression, access buildings.
 6. **Guilds:** accounts/sync, guild bank, world bosses with shared journal and rewards.

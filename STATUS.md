@@ -2,7 +2,9 @@
 
 > Update this file whenever a slice lands. Roadmap definition: DESIGN.md §10.
 
-**Current phase: 3 (Progression), slice 1 of ~6 done.** As of July 2026.
+**Current phase: 3 (Progression), slice 1 of 6 done; world & leveling design
+done (GDD v0.4) — next up: slice 2 (levels + zone grinding, engine).**
+As of July 2026.
 
 ## Phase checklist
 
@@ -13,13 +15,32 @@
       (bars + log, playback), training-dummy review (kill %, DPS histogram,
       TTK, mistakes). Monte Carlo in a Web Worker.
 - [ ] **Phase 3 — Progression**
-  - [x] Gear: item model + catalog (4 slots × 3 tiers, resist/behavior
-        tradeoff pieces), gear picker, outgearing curve verified
-  - [ ] Levels (XP, level → base stats)
-  - [ ] Talents (numbers + new behavior controls + behavior stats; loadouts)
-  - [ ] Professions v1 (herbalism→alchemy loop feeding consumables)
-  - [ ] World map, travel, task queues (offline catch-up computation)
-  - [ ] Home base v1 (bank, workshops, training arena)
+  - [x] Slice 1 — Gear: item model + catalog (4 slots × 3 tiers,
+        resist/behavior tradeoff pieces), gear picker, outgearing curve verified
+  - [x] World & leveling **design** (GDD v0.4): level system + unlock arc
+        (DESIGN.md §2), v1 world four regions + XP/risk grinding model
+        (DESIGN.md §5). Design only — implementation is slices 2–3 below.
+  - [ ] **Slice 2 — Levels + zone grinding (engine).** Implement per
+        DESIGN.md §2 "Levels & the Unlock Arc" + §5 "Leveling: XP/hour,
+        Risk & Devaluation": level-indexed naked base (L10 naked must equal
+        the current base — 60 SP / 2,100 HP — so existing balance holds),
+        XP curve, ability/intent unlock table as data, declarative mob-pack
+        encounters for the four zones (§5 region table), sim-derived
+        XP/hour + deaths/hour (cached Monte Carlo vs. mob pack with pull-cycle
+        downtime), overlevel XP devaluation. CLI harness: `--level`,
+        `--zone` → prints XP/hour, risk tier, deaths/hour. Zone bosses:
+        Bandit Warlord (type-1 lite) + Emberwing (type-2) as BossDefinitions.
+  - [ ] **Slice 3 — World map, travel, task queues (web).** Region map UI
+        over the four regions, send-to-grind as a queueable task, travel
+        times, real-time progress + offline catch-up (deterministic
+        evaluation of elapsed time), gates: boss-kill flags, bridge build
+        (simple gather task supplies materials — professions NOT required),
+        lethality shown as the sim-derived risk tier. Level/XP display on
+        the character panel; unlock arc hides locked intents/abilities.
+  - [ ] Slice 4 — Talents (numbers + new behavior controls + behavior
+        stats; loadouts)
+  - [ ] Slice 5 — Professions v1 (herbalism→alchemy loop feeding consumables)
+  - [ ] Slice 6 — Home base v1 (bank, workshops, training arena)
 - [ ] **Phase 4 — Group content**: 3–5-char dungeon, trinity (Warrior/Priest
       kits), boss journal + discovery, boss plan timeline, group CDs, first
       live calls + tactical pause + call→plan adoption, familiarity, hold DPS,
