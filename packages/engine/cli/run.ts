@@ -7,6 +7,7 @@
  */
 import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
 import { makeMage } from '../src/content/classes/mage';
+import { GEAR_SETS } from '../src/content/items';
 import { DEFAULT_STANCE } from '../src/model/stance';
 import { runFight } from '../src/sim/engine';
 import { formatEvents } from '../src/analysis/metrics';
@@ -21,6 +22,11 @@ function arg(name: string, fallback: number): number {
 }
 const flag = (name: string): boolean => process.argv.includes(`--${name}`);
 
+function strArg(name: string, fallback: string): string {
+  const i = process.argv.indexOf(`--${name}`);
+  return i === -1 || i + 1 >= process.argv.length ? fallback : process.argv[i + 1]!;
+}
+
 const n = arg('n', 2000);
 const seed = arg('seed', 42);
 const stance = {
@@ -30,10 +36,16 @@ const stance = {
   potionThresholdPct: arg('potion', DEFAULT_STANCE.potionThresholdPct),
 };
 const discipline = arg('discipline', 50);
+const gearName = strArg('gear', 'default');
+const gear = GEAR_SETS[gearName];
+if (!gear) throw new Error(`unknown gear set '${gearName}' (${Object.keys(GEAR_SETS).join('/')})`);
 
 const setup = {
-  player: makeMage({ discipline }),
-  boss: makeCinderMaw(),
+  player: makeMage({ discipline }, gear),
+  boss: makeCinderMaw({
+    ...(arg('hp', 0) > 0 ? { hp: arg('hp', 0) } : {}),
+    ...(arg('enrage', 0) > 0 ? { enrageAtMs: arg('enrage', 0) * 1000 } : {}),
+  }),
   stance,
 };
 
@@ -57,7 +69,7 @@ const sortDesc = (rec: Record<string, number>) =>
 
 console.log(`\n${setup.boss.name} — ${n} runs, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
 console.log(
-  `  stance: offense ${stance.offense}  targeting ${stance.targeting}  potion <${stance.potionThresholdPct}%  discipline ${discipline}`,
+  `  stance: offense ${stance.offense}  targeting ${stance.targeting}  potion <${stance.potionThresholdPct}%  discipline ${discipline}  gear ${gearName} (${setup.player.stats.spellPower} SP, ${setup.player.stats.maxHp} HP)`,
 );
 console.log(`\n  Kill rate:      ${pct(result.killRate)}`);
 for (const [kind, count] of sortDesc(result.lossBreakdown as Record<string, number>)) {

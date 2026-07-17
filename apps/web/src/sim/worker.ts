@@ -1,8 +1,11 @@
 /// <reference lib="webworker" />
 import {
+  ITEMS_BY_ID,
   makeCinderMaw,
   makeMage,
   runMonteCarlo,
+  type GearSlot,
+  type Item,
   type StanceConfig,
 } from '@rpg/engine';
 
@@ -14,6 +17,7 @@ import {
 export interface SimRequest {
   stance: StanceConfig;
   behavior: { discipline: number; aoeEfficiency: number; damageWhileMoving: number };
+  gear: Record<GearSlot, string>;
   iterations: number;
   baseSeed: number;
 }
@@ -33,10 +37,13 @@ export interface SimResponse {
 }
 
 self.onmessage = (msg: MessageEvent<SimRequest>) => {
-  const { stance, behavior, iterations, baseSeed } = msg.data;
+  const { stance, behavior, gear, iterations, baseSeed } = msg.data;
+  const items = Object.values(gear)
+    .map((id) => ITEMS_BY_ID[id])
+    .filter((i): i is Item => Boolean(i));
   const started = performance.now();
   const result = runMonteCarlo(
-    { player: makeMage(behavior), boss: makeCinderMaw(), stance },
+    { player: makeMage(behavior, items), boss: makeCinderMaw(), stance },
     iterations,
     baseSeed,
   );

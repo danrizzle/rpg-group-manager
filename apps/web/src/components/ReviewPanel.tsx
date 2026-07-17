@@ -20,7 +20,8 @@ export function ReviewPanel() {
   const runSim = useStore((s) => s.runSim);
   const stance = useStore((s) => s.stance);
   const behavior = useStore((s) => s.behavior);
-  const stale = simIsStale(sim, stance, behavior);
+  const gear = useStore((s) => s.gear);
+  const stale = simIsStale(sim, stance, behavior, gear);
   const r = sim.result;
 
   return (

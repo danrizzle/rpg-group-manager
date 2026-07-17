@@ -1,6 +1,34 @@
-import { makeMage, mistakeChance, reactionTimeMs } from '@rpg/engine';
+import {
+  itemsForSlot,
+  makeMage,
+  mistakeChance,
+  reactionTimeMs,
+  type GearSlot,
+  type ItemBonuses,
+} from '@rpg/engine';
 import { useMemo } from 'react';
-import { POTION_STEPS, STANCES, TARGET_STEPS, useStore } from '../store';
+import { POTION_STEPS, resolveGear, STANCES, TARGET_STEPS, useStore } from '../store';
+
+const SLOTS: { slot: GearSlot; label: string }[] = [
+  { slot: 'weapon', label: 'Weapon' },
+  { slot: 'chest', label: 'Chest' },
+  { slot: 'ring', label: 'Ring' },
+  { slot: 'trinket', label: 'Trinket' },
+];
+
+function bonusText(b: ItemBonuses): string {
+  const parts: string[] = [];
+  if (b.spellPower) parts.push(`+${b.spellPower} SP`);
+  if (b.maxHp) parts.push(`+${b.maxHp} HP`);
+  if (b.critChance) parts.push(`+${Math.round(b.critChance * 100)}% crit`);
+  if (b.hastePct) parts.push(`+${b.hastePct}% haste`);
+  if (b.armor) parts.push(`+${b.armor} armor`);
+  for (const [type, v] of Object.entries(b.resistances ?? {})) parts.push(`+${v} ${type} res`);
+  if (b.discipline) parts.push(`+${b.discipline} discipline`);
+  if (b.aoeEfficiency) parts.push(`+${Math.round(b.aoeEfficiency * 100)}% AoE eff`);
+  if (b.damageWhileMoving) parts.push(`+${Math.round(b.damageWhileMoving * 100)}% dmg moving`);
+  return parts.join(', ');
+}
 
 function DevSlider(props: {
   label: string;
@@ -35,15 +63,20 @@ export function CharacterPanel() {
   const setStance = useStore((s) => s.setStance);
   const setBehavior = useStore((s) => s.setBehavior);
   const applyAutoPreset = useStore((s) => s.applyAutoPreset);
-  const mage = useMemo(() => makeMage(), []);
+  const gear = useStore((s) => s.gear);
+  const setGear = useStore((s) => s.setGear);
+  const mage = useMemo(() => makeMage(behavior, resolveGear(gear)), [behavior, gear]);
 
   const activeStance = STANCES.find((st) => st.offense === stance.offense);
+  const fireRes = mage.stats.resistances.fire ?? 0;
 
   return (
     <section className="panel">
       <h2>Elara the Mage</h2>
       <div className="statline">
         {mage.stats.maxHp} HP · {mage.stats.spellPower} SP · {Math.round(mage.stats.critChance * 100)}% crit
+        {mage.stats.hastePct > 0 && ` · ${mage.stats.hastePct}% haste`}
+        {fireRes > 0 && ` · ${fireRes} fire res`}
       </div>
 
       <div className="preset-row">
@@ -105,6 +138,21 @@ export function CharacterPanel() {
           <option value="save-for-plan-window">save for plan window (locked)</option>
         </select>
       </div>
+
+      <h3>Gear</h3>
+      {SLOTS.map(({ slot, label }) => (
+        <div className="control" key={slot}>
+          <div className="control-label">{label}</div>
+          <select value={gear[slot]} onChange={(e) => setGear(slot, e.target.value)}>
+            <option value="">— empty —</option>
+            {itemsForSlot(slot).map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name} (t{item.tier}) — {bonusText(item.bonuses)}
+              </option>
+            ))}
+          </select>
+        </div>
+      ))}
 
       <h3>Earned stats</h3>
       <p className="muted">

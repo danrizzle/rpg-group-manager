@@ -1,29 +1,45 @@
 import type { CharacterDef } from '../../sim/engine';
-import type { BehaviorStats } from '../../model/stats';
+import type { BehaviorStats, CombatStats } from '../../model/stats';
+import { applyGear, type Item } from '../../model/item';
+import { GEAR_SETS } from '../items';
 
 /**
  * v1 test kit: the Mage (GDD §2) — the class with the clearest
  * single-target↔AoE stance tradeoff. Numbers are placeholder balance.
+ *
+ * Stats assemble as naked base + gear; the 'default' set reproduces the
+ * pre-gear balance (100 SP, 2400 HP, 15% crit), so existing tuning holds.
  */
-export function makeMage(behavior?: Partial<BehaviorStats>): CharacterDef {
+const NAKED_BASE: CombatStats = {
+  maxHp: 2100,
+  attackPower: 0,
+  spellPower: 60,
+  healingPower: 0,
+  critChance: 0.1,
+  hastePct: 0,
+  armor: 60,
+  resistances: {},
+};
+
+const BASE_BEHAVIOR: BehaviorStats = {
+  damageWhileMoving: 0.6,
+  aoeEfficiency: 1.0,
+  discipline: 50,
+};
+
+export function makeMage(
+  behaviorOverride?: Partial<BehaviorStats>,
+  gear: Item[] = GEAR_SETS['default']!,
+): CharacterDef {
+  const { stats, behavior } = applyGear(
+    NAKED_BASE,
+    { ...BASE_BEHAVIOR, ...behaviorOverride },
+    gear,
+  );
   return {
     name: 'Elara',
-    stats: {
-      maxHp: 2400,
-      attackPower: 0,
-      spellPower: 100,
-      healingPower: 0,
-      critChance: 0.15,
-      hastePct: 0,
-      armor: 120,
-      resistances: {},
-    },
-    behavior: {
-      damageWhileMoving: 0.6,
-      aoeEfficiency: 1.0,
-      discipline: 50,
-      ...behavior,
-    },
+    stats,
+    behavior,
     abilities: [
       {
         id: 'fireball',

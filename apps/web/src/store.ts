@@ -1,10 +1,13 @@
 import {
+  ITEMS_BY_ID,
   makeCinderMaw,
   makeMage,
   runFight,
   type BossDefinition,
   type CharacterDef,
   type FightResult,
+  type GearSlot,
+  type Item,
   type StanceConfig,
 } from '@rpg/engine';
 import { create } from 'zustand';
@@ -54,6 +57,22 @@ export const DEFAULT_BEHAVIOR: BehaviorOverrides = {
   damageWhileMoving: 0.6,
 };
 
+/** Equipped item id per slot ('' = empty). */
+export type GearSelection = Record<GearSlot, string>;
+
+export const DEFAULT_GEAR_SELECTION: GearSelection = {
+  weapon: 'emberwood-staff',
+  chest: 'runeweave-robe',
+  ring: 'copper-band',
+  trinket: 'lucky-charm',
+};
+
+export function resolveGear(sel: GearSelection): Item[] {
+  return Object.values(sel)
+    .map((id) => ITEMS_BY_ID[id])
+    .filter((i): i is Item => Boolean(i));
+}
+
 const worker = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' });
 
 export interface SimState {
@@ -71,8 +90,10 @@ export interface FightState {
 interface Store {
   stance: StanceConfig;
   behavior: BehaviorOverrides;
+  gear: GearSelection;
   setStance: (patch: Partial<StanceConfig>) => void;
   setBehavior: (patch: Partial<BehaviorOverrides>) => void;
+  setGear: (slot: GearSlot, itemId: string) => void;
   applyAutoPreset: () => void;
 
   sim: SimState;
@@ -98,24 +119,26 @@ export const useStore = create<Store>((set, get) => {
   return {
     stance: { ...AUTO_PRESET },
     behavior: { ...DEFAULT_BEHAVIOR },
+    gear: { ...DEFAULT_GEAR_SELECTION },
     setStance: (patch) => set((s) => ({ stance: { ...s.stance, ...patch } })),
     setBehavior: (patch) => set((s) => ({ behavior: { ...s.behavior, ...patch } })),
+    setGear: (slot, itemId) => set((s) => ({ gear: { ...s.gear, [slot]: itemId } })),
     applyAutoPreset: () => set({ stance: { ...AUTO_PRESET } }),
 
     sim: { running: false, result: null },
     runSim: (iterations) => {
-      const { stance, behavior, sim } = get();
+      const { stance, behavior, gear, sim } = get();
       if (sim.running) return;
-      pendingRequest = { stance, behavior, iterations, baseSeed: SIM_BASE_SEED };
+      pendingRequest = { stance, behavior, gear, iterations, baseSeed: SIM_BASE_SEED };
       set({ sim: { running: true, result: sim.result } });
       worker.postMessage(pendingRequest);
     },
 
     fight: null,
     pull: () => {
-      const { stance, behavior } = get();
+      const { stance, behavior, gear } = get();
       const seed = Math.floor(Math.random() * 2 ** 31);
-      const player = makeMage(behavior);
+      const player = makeMage(behavior, resolveGear(gear));
       const boss = makeCinderMaw();
       const result = runFight({ player, boss, stance, seed });
       set({ fight: { result, seed, player, boss }, playT: 0, playing: true, speed: 1 });
@@ -129,10 +152,16 @@ export const useStore = create<Store>((set, get) => {
 });
 
 /** Is the shown sim result out of date vs. the current setup? */
-export function simIsStale(sim: SimState, stance: StanceConfig, behavior: BehaviorOverrides): boolean {
+export function simIsStale(
+  sim: SimState,
+  stance: StanceConfig,
+  behavior: BehaviorOverrides,
+  gear: GearSelection,
+): boolean {
   if (!sim.result) return false;
   const r = sim.result.request;
   return (
+    Object.entries(gear).some(([slot, id]) => r.gear[slot as GearSlot] !== id) ||
     r.behavior.discipline !== behavior.discipline ||
     r.behavior.aoeEfficiency !== behavior.aoeEfficiency ||
     r.behavior.damageWhileMoving !== behavior.damageWhileMoving ||

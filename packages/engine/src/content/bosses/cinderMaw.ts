@@ -12,12 +12,12 @@ export function makeCinderMaw(overrides?: Partial<BossDefinition>): BossDefiniti
   return {
     id: 'cinder-maw',
     name: 'Cinder Maw',
-    hp: 43_500,
+    hp: 46_500,
     meleeDamage: 36,
     meleeSwingMs: 2200,
     meleeDamageType: 'physical',
 
-    enrageAtMs: 330_000,
+    enrageAtMs: 375_000,
     enrageDamageMult: 8,
 
     timeline: [

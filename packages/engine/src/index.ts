@@ -11,6 +11,9 @@ export type { AddDefinition, BossDefinition, TimedBossAbility } from './model/bo
 export { runFight, PLAYER_ID, BOSS_ID } from './sim/engine';
 export type { CharacterDef, FightResult, FightResultKind, FightSetup } from './sim/engine';
 export { reactionTimeMs, mistakeChance } from './sim/mistakes';
+export { applyGear } from './model/item';
+export type { GearSlot, Item, ItemBonuses } from './model/item';
+export { GEAR_SETS, ITEMS, ITEMS_BY_ID, itemsForSlot } from './content/items';
 export { makeMage } from './content/classes/mage';
 export { makeCinderMaw } from './content/bosses/cinderMaw';
 export { summarizeRun, formatEvents } from './analysis/metrics';
