@@ -39,8 +39,10 @@ export interface RegionMeta {
   name: string;
   /** How this region is unlocked, for the locked-card hint. */
   gateHint: string;
-  /** The zone boss shown on this region's card, if any. */
+  /** The gate boss (fought while this region is LOCKED, to unlock it). */
   boss?: { id: 'bandit-warlord' | 'emberwing'; name: string };
+  /** A capstone boss residing here, challengeable once the region is UNLOCKED. */
+  capstoneBoss?: { id: string; name: string };
   /** This region supplies bridge materials (Duskwood). */
   gathers?: boolean;
 }
@@ -65,6 +67,7 @@ export const REGIONS: RegionMeta[] = [
     name: 'Cinder Wastes',
     gateHint: 'Defeat Emberwing in Ashen Foothills',
     boss: { id: 'emberwing', name: 'Emberwing' },
+    capstoneBoss: { id: 'cinder-maw', name: 'Cinder Maw' },
   },
 ];
 

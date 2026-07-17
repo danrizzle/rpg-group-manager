@@ -78,6 +78,11 @@ export function RegionCard({ region }: { region: RegionMeta }) {
                 Gather timber
               </button>
             )}
+            {region.capstoneBoss && (
+              <button className="btn btn-small btn-primary" onClick={() => pull(region.capstoneBoss!.id)}>
+                Challenge {region.capstoneBoss.name}
+              </button>
+            )}
           </>
         )}
         {canChallenge && region.boss && (
