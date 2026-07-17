@@ -1,4 +1,5 @@
 import { useStore } from '../store';
+import { MATERIAL_LABELS, RECIPES_BY_ID } from '../world/professions';
 import { REGIONS } from '../world/tasks';
 import type { AwayEvent } from '../world/types';
 
@@ -13,7 +14,11 @@ function line(e: AwayEvent): string {
         e.estimatedDeaths && e.estimatedDeaths >= 0.5 ? ` (~${Math.round(e.estimatedDeaths)} close calls)` : ''
       }`;
     case 'gather':
-      return `Gathered ${Math.round(e.materialGained ?? 0)} timber in ${regionName(e.zone)}`;
+      return `Gathered ${Math.round(e.materialGained ?? 0)} ${
+        e.material ? MATERIAL_LABELS[e.material] : 'materials'
+      } in ${regionName(e.zone)}`;
+    case 'craft':
+      return `Crafted ${e.craftedCount ?? 0}× ${RECIPES_BY_ID[e.recipeId ?? '']?.name ?? e.recipeId}`;
   }
 }
 

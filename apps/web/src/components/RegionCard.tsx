@@ -1,5 +1,6 @@
 import { ZONES, levelForXp } from '@rpg/engine';
 import { useStore } from '../store';
+import { MATERIAL_LABELS } from '../world/professions';
 import { BRIDGE_COST, rateKey, regionUnlocked, type RegionMeta } from '../world/tasks';
 
 const RISK_CHIP: Record<string, string> = {
@@ -74,9 +75,9 @@ export function RegionCard({ region }: { region: RegionMeta }) {
             <button className="btn btn-small btn-primary" disabled={!rate} onClick={() => enqueueGrind(region.id)}>
               Send to grind
             </button>
-            {region.gathers && (
+            {region.gather && (
               <button className="btn btn-small" onClick={() => enqueueGather(region.id)}>
-                Gather timber
+                Gather {MATERIAL_LABELS[region.gather.material]}
               </button>
             )}
             {region.capstoneBoss && (

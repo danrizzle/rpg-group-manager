@@ -15,6 +15,7 @@ import {
   type StanceConfig,
 } from '@rpg/engine';
 import type { ZoneId } from '../world/types';
+import { resolveConsumables } from '../world/professions';
 
 /**
  * Off-main-thread sim. Handles two request kinds behind a discriminated
@@ -36,6 +37,8 @@ export interface SimRequest {
   gear: Record<GearSlot, string>;
   level: number;
   talents: string[];
+  /** Equipped consumable slot ids — the dummy simulates them for free (GDD §3). */
+  consumables: string[];
   iterations: number;
   baseSeed: number;
 }
@@ -83,7 +86,11 @@ function runSim(req: SimRequest): SimResponse {
   const items = resolveItems(req.gear);
   const started = performance.now();
   const result = runMonteCarlo(
-    { player: makeMage(req.behavior, items, req.level, req.talents), boss: makeCinderMaw(), stance: req.stance },
+    {
+      player: makeMage(req.behavior, items, req.level, req.talents, resolveConsumables(req.consumables)),
+      boss: makeCinderMaw(),
+      stance: req.stance,
+    },
     req.iterations,
     req.baseSeed,
   );
@@ -104,8 +111,11 @@ function runSim(req: SimRequest): SimResponse {
 function runGrind(req: GrindRequest): GrindResponse {
   const items = resolveItems(req.gear);
   const pack = ZONES[req.zone]!();
+  // v1: grinding runs on the crafted-consumable economy with EMPTY slots —
+  // the free legacy potion must not leak into AFK grinding. Per-task
+  // consumable budgets are a possible follow-up.
   const raw = grindRates(
-    { player: makeMage(req.behavior, items, req.level, req.talents), stance: req.stance, pack },
+    { player: makeMage(req.behavior, items, req.level, req.talents, []), stance: req.stance, pack },
     DEFAULT_PULL_CYCLE,
     req.iterations,
     req.baseSeed,

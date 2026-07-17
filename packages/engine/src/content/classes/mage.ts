@@ -1,7 +1,8 @@
 import type { CharacterDef } from '../../sim/engine';
 import type { Ability } from '../../model/ability';
 import type { BehaviorStats } from '../../model/stats';
-import { applyGear, type Item } from '../../model/item';
+import { applyGear, foldBonuses, type Item } from '../../model/item';
+import { normalizeConsumables, type ConsumableDefinition } from '../../model/consumable';
 import { LEVEL_CAP, abilitiesUpToLevel, nakedBaseForLevel } from '../../model/progression';
 import { applyTalents, talentPointsForLevel, validateTalentSelection } from '../../model/talent';
 import { GEAR_SETS } from '../items';
@@ -80,11 +81,18 @@ const FULL_KIT: Ability[] = [
       },
 ];
 
+/**
+ * `consumables` undefined = legacy character: the free kit potion stays and
+ * streams are byte-identical to pre-slice-5. Provided (even []) = the kit's
+ * consumable-tagged abilities are removed; potions/flasks come only from the
+ * equipped slots (GDD §3/§6 — real fights consume what you bring).
+ */
 export function makeMage(
   behaviorOverride?: Partial<BehaviorStats>,
   gear: Item[] = GEAR_SETS['default']!,
   level: number = LEVEL_CAP,
   talents: string[] = [],
+  consumables?: ConsumableDefinition[],
 ): CharacterDef {
   const geared = applyGear(
     nakedBaseForLevel(level),
@@ -93,12 +101,31 @@ export function makeMage(
   );
   const learned = new Set(abilitiesUpToLevel(level));
   validateTalentSelection(MAGE_TALENTS, talents, talentPointsForLevel(level));
-  const { stats, behavior, abilities } = applyTalents(
+  const kit =
+    consumables === undefined
+      ? FULL_KIT
+      : FULL_KIT.filter((a) => !a.tags.includes('consumable'));
+  const talented = applyTalents(
     geared.stats,
     geared.behavior,
-    FULL_KIT.filter((a) => learned.has(a.id)),
+    kit.filter((a) => learned.has(a.id)),
     MAGE_TALENTS,
     talents,
   );
-  return { name: 'Elara', stats, behavior, abilities };
+  if (consumables === undefined) {
+    return { name: 'Elara', ...talented };
+  }
+  const { passives, actives, summary } = normalizeConsumables(consumables);
+  const folded = foldBonuses(
+    talented.stats,
+    talented.behavior,
+    passives.map((p) => p.bonuses),
+  );
+  return {
+    name: 'Elara',
+    stats: folded.stats,
+    behavior: folded.behavior,
+    abilities: [...talented.abilities, ...actives],
+    consumables: summary,
+  };
 }

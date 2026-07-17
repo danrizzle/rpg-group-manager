@@ -1,4 +1,5 @@
 import { useStore } from '../store';
+import { MATERIAL_LABELS, RECIPES_BY_ID } from '../world/professions';
 import { REGIONS } from '../world/tasks';
 import type { Task } from '../world/types';
 
@@ -11,7 +12,9 @@ function taskLabel(t: Task): string {
     case 'grind':
       return `Grind ${regionName(t.zone)}`;
     case 'gather':
-      return `Gather timber (${regionName(t.zone)})`;
+      return `Gather ${MATERIAL_LABELS[t.material]} (${regionName(t.zone)})`;
+    case 'craft':
+      return `Craft ${t.count}× ${RECIPES_BY_ID[t.recipeId]?.name ?? t.recipeId}`;
   }
 }
 

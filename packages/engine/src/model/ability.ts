@@ -42,6 +42,8 @@ export interface Ability {
   cooldownMs: number;
   /** Off-GCD abilities fire without consuming the actor's action cycle. */
   offGcd?: boolean;
+  /** Uses per fight (consumable charges); absent = unlimited. */
+  chargesPerFight?: number;
   effect: AbilityEffect;
   tags: AbilityTag[];
   /** If true, damageWhileMoving applies while the actor is in a movement window. */

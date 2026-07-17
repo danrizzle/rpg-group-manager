@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useStore } from '../store';
 
 /**
- * Loadouts (GDD §2): save the whole build — stance, talents, gear — under a
- * name and re-apply it later. Consumable slots join in slice 5.
+ * Loadouts (GDD §2): save the whole build — stance, talents, gear and
+ * consumable slots — under a name and re-apply it later.
  */
 export function LoadoutPanel() {
   const loadouts = useStore((s) => s.loadouts);
@@ -34,7 +34,7 @@ export function LoadoutPanel() {
           className="btn btn-small"
           disabled={!name.trim()}
           onClick={save}
-          title="Save the current stance, talents and gear (an existing name is overwritten)"
+          title="Save the current stance, talents, gear and consumable slots (an existing name is overwritten)"
         >
           Save
         </button>
@@ -56,7 +56,6 @@ export function LoadoutPanel() {
           ))}
         </ul>
       )}
-      <p className="muted">Consumable slots join loadouts in slice 5.</p>
     </>
   );
 }

@@ -1,6 +1,7 @@
 import type { StanceConfig } from '@rpg/engine';
 import type { BehaviorOverrides, GearSelection } from '../store';
-import type { RegionId, Unlocks } from './types';
+import type { Materials, RegionId, Unlocks } from './types';
+import { HERB_RATE_PER_HOUR } from './professions';
 
 /**
  * World-loop tuning constants + pure helpers. Durations are in GAME-ms; the
@@ -43,24 +44,30 @@ export interface RegionMeta {
   boss?: { id: 'bandit-warlord' | 'emberwing'; name: string };
   /** A capstone boss residing here, challengeable once the region is UNLOCKED. */
   capstoneBoss?: { id: string; name: string };
-  /** This region supplies bridge materials (Duskwood). */
-  gathers?: boolean;
+  /** What a gather task in this region yields (timber or herbs, GDD §5/§6). */
+  gather?: { material: keyof Materials; ratePerHour: number };
 }
 
 /** Regions in world order (Heartfield → … → Cinder Wastes), GDD §5. */
 export const REGIONS: RegionMeta[] = [
-  { id: 'heartfield', name: 'Heartfield', gateHint: 'Starting region' },
+  {
+    id: 'heartfield',
+    name: 'Heartfield',
+    gateHint: 'Starting region',
+    gather: { material: 'sunleaf', ratePerHour: HERB_RATE_PER_HOUR },
+  },
   {
     id: 'duskwood',
     name: 'Duskwood Edge',
     gateHint: 'Defeat the Bandit Warlord in Heartfield',
     boss: { id: 'bandit-warlord', name: 'Bandit Warlord' },
-    gathers: true,
+    gather: { material: 'bridgeTimber', ratePerHour: GATHER_RATE_PER_HOUR },
   },
   {
     id: 'ashen-foothills',
     name: 'Ashen Foothills',
     gateHint: 'Build the Bridge (20 timber gathered in Duskwood)',
+    gather: { material: 'emberbloom', ratePerHour: HERB_RATE_PER_HOUR },
   },
   {
     id: 'cinder-wastes',

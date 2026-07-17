@@ -13,8 +13,15 @@ export { packBandMax } from './model/mobPack';
 export { runFight, PLAYER_ID, BOSS_ID, enemyStats } from './sim/engine';
 export type { CharacterDef, EndCondition, FightResult, FightResultKind, FightSetup } from './sim/engine';
 export { reactionTimeMs, mistakeChance } from './sim/mistakes';
-export { applyGear } from './model/item';
+export { applyGear, foldBonuses } from './model/item';
 export type { GearSlot, Item, ItemBonuses } from './model/item';
+export { normalizeConsumables } from './model/consumable';
+export type {
+  ActiveConsumable,
+  ConsumableDefinition,
+  EquippedConsumable,
+  PassiveConsumable,
+} from './model/consumable';
 export {
   LEVEL_CAP,
   UNLOCKS,
@@ -36,6 +43,7 @@ export {
 } from './model/talent';
 export type { TalentEffect, TalentNode, TalentTree } from './model/talent';
 export { GEAR_SETS, ITEMS, ITEMS_BY_ID, itemsForSlot } from './content/items';
+export { CONSUMABLES, CONSUMABLES_BY_ID, CONSUMABLE_SLOTS } from './content/consumables';
 export { makeMage } from './content/classes/mage';
 export { MAGE_TALENTS, TALENT_BUILDS } from './content/classes/mageTalents';
 export { makeCinderMaw } from './content/bosses/cinderMaw';

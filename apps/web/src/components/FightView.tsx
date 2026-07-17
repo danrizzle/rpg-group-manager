@@ -7,6 +7,9 @@ const BUFF_NAMES: Record<string, string> = {
   combustion: 'Combustion',
   'ice-barrier': 'Ice Barrier',
   tantrum: 'Tantrum',
+  pyroclasm: 'Pyroclasm',
+  'flask-of-embers': 'Flask of Embers',
+  'fire-ward-potion': 'Fire Ward',
 };
 
 function HpBar({ actor, big }: { actor: ActorView; big?: boolean }) {
@@ -93,8 +96,8 @@ export function FightView() {
       <section className="panel fight-panel">
         <h2>Real Fight</h2>
         <p className="muted">
-          One rolled run — same setup, different outcome every pull. Costs time (and later, consumables); the
-          training dummy on the right is free.
+          One rolled run — same setup, different outcome every pull. Costs time and the consumables
+          you bring; the training dummy on the right is free.
         </p>
         <button className="btn btn-primary" onClick={() => pull()}>
           Pull Cinder Maw

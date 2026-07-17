@@ -44,8 +44,12 @@ describe('talents', () => {
 
   it('stat and behavior effects fold on top of gear and clamp', () => {
     const base = makeMage();
+    // Read the bonus from the tree so balance retunes don't break the fold test.
+    const affinityEffect = MAGE_TALENTS.nodes.find((n) => n.id === 'pyromantic-affinity')!.effects[0]!;
+    const spBonus = affinityEffect.kind === 'stat' ? affinityEffect.add : 0;
     const fire = makeMage(undefined, undefined, 10, ['pyromantic-affinity']);
-    expect(fire.stats.spellPower).toBe(base.stats.spellPower + 8);
+    expect(spBonus).toBeGreaterThan(0);
+    expect(fire.stats.spellPower).toBe(base.stats.spellPower + spBonus);
     const focused = makeMage({ discipline: 95 }, undefined, 10, ['mental-focus']);
     expect(focused.behavior.discipline).toBe(100);
   });

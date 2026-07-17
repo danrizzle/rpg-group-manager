@@ -21,11 +21,17 @@ export interface Unlocks {
 
 export interface Materials {
   bridgeTimber: number;
+  /** Herbs (slice 5): sunleaf grows in Heartfield, emberbloom in Ashen Foothills. */
+  sunleaf: number;
+  emberbloom: number;
 }
+
+/** Crafted consumables by engine consumable id (slice 5 alchemy output). */
+export type Inventory = Record<string, number>;
 
 // ---- task queue ----
 
-export type TaskKind = 'travel' | 'grind' | 'gather';
+export type TaskKind = 'travel' | 'grind' | 'gather' | 'craft';
 
 interface BaseTask {
   id: string;
@@ -57,7 +63,18 @@ export interface GatherTask extends BaseTask {
   ratePerHour: number;
 }
 
-export type Task = TravelTask | GrindTask | GatherTask;
+export interface CraftTask extends BaseTask {
+  kind: 'craft';
+  /** Recipe id == engine consumable id (v1). Herbs for ALL units are deducted at enqueue. */
+  recipeId: string;
+  count: number;
+  /** Game-ms per unit, snapshotted at enqueue; durationGameMs = count × unitGameMs. */
+  unitGameMs: number;
+  /** Whole units already deposited into the inventory. */
+  producedUnits: number;
+}
+
+export type Task = TravelTask | GrindTask | GatherTask | CraftTask;
 
 // ---- offline catch-up summary ----
 
@@ -66,7 +83,10 @@ export interface AwayEvent {
   zone?: ZoneId;
   to?: RegionId;
   xpGained?: number;
+  material?: keyof Materials;
   materialGained?: number;
+  recipeId?: string;
+  craftedCount?: number;
   /** Statistical, display-only — never simulated per death. */
   estimatedDeaths?: number;
 }
@@ -81,5 +101,6 @@ export interface WorldSlice {
   xp: number;
   region: RegionId;
   materials: Materials;
+  inventory: Inventory;
   queue: Task[];
 }

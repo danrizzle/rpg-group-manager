@@ -1,4 +1,6 @@
 import {
+  CONSUMABLES,
+  CONSUMABLE_SLOTS,
   LEVEL_CAP,
   MAGE_TALENTS,
   UNLOCKS,
@@ -16,6 +18,7 @@ import {
 } from '@rpg/engine';
 import { useMemo } from 'react';
 import { POTION_STEPS, resolveGear, STANCES, TARGET_STEPS, useStore } from '../store';
+import { resolveConsumables } from '../world/professions';
 import { LoadoutPanel } from './LoadoutPanel';
 import { TalentPanel } from './TalentPanel';
 
@@ -82,10 +85,15 @@ export function CharacterPanel() {
   const setGear = useStore((s) => s.setGear);
   const xp = useStore((s) => s.xp);
   const talents = useStore((s) => s.talents);
+  const equippedConsumables = useStore((s) => s.equippedConsumables);
+  const setConsumableSlot = useStore((s) => s.setConsumableSlot);
+  const inventory = useStore((s) => s.inventory);
   const level = levelForXp(xp);
+  // Preview at nominal charges (no inventory arg): the stat line shows what
+  // the equipped slots do, independent of current stock.
   const mage = useMemo(
-    () => makeMage(behavior, resolveGear(gear), level, talents),
-    [behavior, gear, level, talents],
+    () => makeMage(behavior, resolveGear(gear), level, talents, resolveConsumables(equippedConsumables)),
+    [behavior, gear, level, talents, equippedConsumables],
   );
 
   const activeStance = STANCES.find((st) => st.offense === stance.offense);
@@ -218,6 +226,36 @@ export function CharacterPanel() {
           </select>
         </div>
       ))}
+
+      {potionUnlocked && (
+        <>
+          <h3>Consumables ({CONSUMABLE_SLOTS} slots)</h3>
+          <p className="muted">
+            Brought into every real fight and consumed there; the training dummy simulates them for
+            free. Craft them via Alchemy on the world map.
+          </p>
+          {Array.from({ length: CONSUMABLE_SLOTS }, (_, i) => {
+            const id = equippedConsumables[i] ?? '';
+            const stock = id ? inventory[id] ?? 0 : 0;
+            return (
+              <div className="control" key={i}>
+                <div className="control-label">Slot {i + 1}</div>
+                <select value={id} onChange={(e) => setConsumableSlot(i, e.target.value)}>
+                  <option value="">— empty —</option>
+                  {CONSUMABLES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} — {inventory[c.id] ?? 0} in bag
+                    </option>
+                  ))}
+                </select>
+                {id && stock === 0 && (
+                  <div className="control-desc">out of stock — slot inert next pull</div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
 
       <TalentPanel level={level} />
 

@@ -5,7 +5,12 @@
  *   pnpm cli -- --n 5000 --seed 42 --level 10 --gear best --boss cinder-maw \
  *               --offense 0.6 --targeting 0.5 --potion 35 --discipline 50 \
  *               --talents throughput|defense|id,id,… --barrier reactive|proactive \
- *               [--trace] [--json]
+ *               --consumables none|id,id,… [--trace] [--json]
+ *
+ * --consumables absent = legacy character (free kit potion); 'none' = crafted
+ * economy with empty slots; ids = equipped slots (duplicates allowed, e.g.
+ * healing-potion,healing-potion). Slot-count limits are not enforced here —
+ * this is a tuning harness.
  *
  * Grind report — sim-derived XP/hour, risk tier and deaths/hour for a zone:
  *   pnpm cli -- --level 2 --zone heartfield --gear starter
@@ -17,6 +22,7 @@ import { makeMage } from '../src/content/classes/mage';
 import { TALENT_BUILDS } from '../src/content/classes/mageTalents';
 import { ZONES } from '../src/content/mobs/zones';
 import { GEAR_SETS } from '../src/content/items';
+import { CONSUMABLES_BY_ID } from '../src/content/consumables';
 import { packBandMax } from '../src/model/mobPack';
 import type { BossDefinition } from '../src/model/boss';
 import { DEFAULT_STANCE } from '../src/model/stance';
@@ -58,8 +64,23 @@ const talentsArg = strArg('talents', '');
 const talents = talentsArg
   ? TALENT_BUILDS[talentsArg] ?? talentsArg.split(',').map((s) => s.trim())
   : [];
+const consumablesArg = strArg('consumables', '');
+const consumables =
+  consumablesArg === ''
+    ? undefined
+    : consumablesArg === 'none'
+      ? []
+      : consumablesArg.split(',').map((s) => {
+          const c = CONSUMABLES_BY_ID[s.trim()];
+          if (!c) {
+            throw new Error(
+              `unknown consumable '${s.trim()}' (${Object.keys(CONSUMABLES_BY_ID).join('/')})`,
+            );
+          }
+          return c;
+        });
 
-const player = makeMage({ discipline }, gear, level, talents);
+const player = makeMage({ discipline }, gear, level, talents, consumables);
 
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 const mmss = (ms: number) => {
@@ -139,7 +160,7 @@ if (flag('json')) {
 
 console.log(`\n${setup.boss.name} — level ${level}, ${n} runs, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
 console.log(
-  `  stance: offense ${stance.offense}  targeting ${stance.targeting}  potion <${stance.potionThresholdPct}%  barrier ${stance.barrierPolicy ?? 'reactive'}  discipline ${discipline}  gear ${gearName}  talents ${talents.length ? talents.join(',') : 'none'} (${setup.player.stats.spellPower} SP, ${setup.player.stats.maxHp} HP)`,
+  `  stance: offense ${stance.offense}  targeting ${stance.targeting}  potion <${stance.potionThresholdPct}%  barrier ${stance.barrierPolicy ?? 'reactive'}  discipline ${discipline}  gear ${gearName}  talents ${talents.length ? talents.join(',') : 'none'}  consumables ${consumables === undefined ? 'legacy' : consumables.length ? consumables.map((c) => c.id).join(',') : 'none'} (${setup.player.stats.spellPower} SP, ${setup.player.stats.maxHp} HP)`,
 );
 console.log(`\n  Kill rate:      ${pct(result.killRate)}`);
 for (const [kind, count] of sortDesc(result.lossBreakdown as Record<string, number>)) {

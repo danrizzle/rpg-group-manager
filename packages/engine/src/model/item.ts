@@ -32,16 +32,18 @@ export interface Item {
   bonuses: ItemBonuses;
 }
 
-/** Assemble effective stats from a naked base plus equipped items. */
-export function applyGear(
+/**
+ * Fold a list of stat bonuses over a base — the shared assembly step for
+ * gear and passive consumables. Clamps crit/discipline/damageWhileMoving.
+ */
+export function foldBonuses(
   base: CombatStats,
   behavior: BehaviorStats,
-  gear: Item[],
+  bonuses: ItemBonuses[],
 ): { stats: CombatStats; behavior: BehaviorStats } {
   const stats: CombatStats = { ...base, resistances: { ...base.resistances } };
   const b: BehaviorStats = { ...behavior };
-  for (const item of gear) {
-    const x = item.bonuses;
+  for (const x of bonuses) {
     stats.spellPower += x.spellPower ?? 0;
     stats.attackPower += x.attackPower ?? 0;
     stats.healingPower += x.healingPower ?? 0;
@@ -61,4 +63,13 @@ export function applyGear(
   b.discipline = Math.min(100, b.discipline);
   b.damageWhileMoving = Math.min(1, b.damageWhileMoving);
   return { stats, behavior: b };
+}
+
+/** Assemble effective stats from a naked base plus equipped items. */
+export function applyGear(
+  base: CombatStats,
+  behavior: BehaviorStats,
+  gear: Item[],
+): { stats: CombatStats; behavior: BehaviorStats } {
+  return foldBonuses(base, behavior, gear.map((item) => item.bonuses));
 }

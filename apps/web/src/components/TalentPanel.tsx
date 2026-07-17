@@ -1,5 +1,6 @@
 import { LEVEL_CAP, MAGE_TALENTS, talentPointsForLevel, type TalentNode } from '@rpg/engine';
 import { talentPointsRemaining, useStore } from '../store';
+import { MATERIAL_LABELS, RESPEC_COST } from '../world/professions';
 
 /**
  * The v1 talent tree (GDD §2): nodes by tier, spend/refund against the
@@ -17,9 +18,12 @@ export function TalentPanel({ level }: { level: number }) {
   const spendTalent = useStore((s) => s.spendTalent);
   const refundTalent = useStore((s) => s.refundTalent);
   const respecTalents = useStore((s) => s.respecTalents);
+  const respecStock = useStore((s) => s.materials[RESPEC_COST.material]);
 
   const pool = talentPointsForLevel(level);
   const remaining = talentPointsRemaining(talents, level);
+  const respecLabel = `${RESPEC_COST.count} ${MATERIAL_LABELS[RESPEC_COST.material]}`;
+  const canAffordRespec = (respecStock ?? 0) >= RESPEC_COST.count;
 
   const lockedReason = (node: TalentNode): string | null => {
     if (talents.includes(node.id)) return null;
@@ -43,11 +47,15 @@ export function TalentPanel({ level }: { level: number }) {
             </span>
             <button
               className="btn btn-small"
-              disabled={talents.length === 0}
+              disabled={talents.length === 0 || !canAffordRespec}
               onClick={respecTalents}
-              title="Refund all talent points (free in v1; a resource cost comes with the economy)"
+              title={
+                canAffordRespec
+                  ? `Refund all talent points for ${respecLabel} (GDD §2 "small resource cost")`
+                  : `Refund all talent points — needs ${respecLabel} (you have ${respecStock ?? 0})`
+              }
             >
-              Respec
+              Respec ({respecLabel})
             </button>
           </>
         )}

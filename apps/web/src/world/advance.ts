@@ -22,6 +22,7 @@ export function advanceWorld(
   let xp = s.xp;
   let region = s.region;
   const materials = { ...s.materials };
+  const inventory = { ...s.inventory };
   const queue: Task[] = s.queue.map((t) => ({ ...t }));
   const events: AwayEvent[] = [];
 
@@ -33,10 +34,18 @@ export function advanceWorld(
     remaining -= spent;
 
     // Partial effects accrue proportionally so the live UI ticks smoothly.
+    // (`?? 0` guards material keys a pre-migration save never had.)
     if (t.kind === 'grind') {
       xp += t.xpPerHour * (spent / MS_PER_HOUR);
     } else if (t.kind === 'gather') {
-      materials[t.material] += t.ratePerHour * (spent / MS_PER_HOUR);
+      materials[t.material] = (materials[t.material] ?? 0) + t.ratePerHour * (spent / MS_PER_HOUR);
+    } else if (t.kind === 'craft') {
+      // Crafting deposits WHOLE units only (herbs were paid at enqueue).
+      const done = Math.min(t.count, Math.floor(t.accruedGameMs / t.unitGameMs));
+      if (done > t.producedUnits) {
+        inventory[t.recipeId] = (inventory[t.recipeId] ?? 0) + (done - t.producedUnits);
+        t.producedUnits = done;
+      }
     }
 
     if (t.accruedGameMs >= t.durationGameMs - 1e-6) {
@@ -52,16 +61,19 @@ export function advanceWorld(
           xpGained: t.xpPerHour * hours,
           estimatedDeaths: t.deathsPerHour * hours,
         });
-      } else {
+      } else if (t.kind === 'gather') {
         events.push({
           kind: 'gather',
           zone: t.zone,
+          material: t.material,
           materialGained: t.ratePerHour * (t.durationGameMs / MS_PER_HOUR),
         });
+      } else {
+        events.push({ kind: 'craft', recipeId: t.recipeId, craftedCount: t.count });
       }
       queue.shift();
     }
   }
 
-  return { next: { xp, region, materials, queue }, events };
+  return { next: { xp, region, materials, inventory, queue }, events };
 }

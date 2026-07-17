@@ -19,7 +19,8 @@ Never install tooling on the host. Use the wrappers:
 
 CLI tuning flags: `--gear naked|starter|default|best`, `--hp`, `--enrage <s>`,
 `--offense`, `--targeting`, `--potion`, `--discipline`, `--talents
-<build|id,…>`, `--barrier reactive|proactive`, `--seed`, `--json`, `--trace`.
+<build|id,…>`, `--barrier reactive|proactive`, `--consumables <id,…|none>`
+(absent = legacy free-potion character), `--seed`, `--json`, `--trace`.
 
 ## Architecture rules (violating these is a bug)
 

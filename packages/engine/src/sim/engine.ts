@@ -5,6 +5,7 @@ import { GCD_MS, type Ability } from '../model/ability';
 import { Actor } from '../model/actor';
 import type { BossDefinition } from '../model/boss';
 import type { MobDefinition, MobPackDefinition } from '../model/mobPack';
+import type { EquippedConsumable } from '../model/consumable';
 import { hasteMult, type BehaviorStats, type CombatStats } from '../model/stats';
 import { validateStance, type StanceConfig } from '../model/stance';
 import { chooseAction, shouldUseBurst } from './decision';
@@ -23,6 +24,12 @@ export interface CharacterDef {
   behavior: BehaviorStats;
   /** Full kit including the potion (tag 'consumable', offGcd). */
   abilities: Ability[];
+  /**
+   * Equipped consumable slots (passives already folded into stats, actives
+   * present in the kit with charges). Absent = legacy character built with
+   * no consumables argument — streams stay byte-identical to pre-slice-5.
+   */
+  consumables?: EquippedConsumable[];
 }
 
 /**
@@ -95,6 +102,8 @@ export class Fight {
   readonly overdueAdds = new Set<string>();
   playerMoving = false;
   private potionPending = false;
+  /** abilityId → remaining uses, for abilities with chargesPerFight. */
+  private readonly chargesLeft = new Map<string, number>();
 
   constructor(setup: FightSetup) {
     validateStance(setup.stance);
@@ -123,6 +132,17 @@ export class Fight {
   }
 
   run(): FightResult {
+    // Equipped passive consumables are stream-visible from t=0 (their stats
+    // were folded at build time; no expiry — they last the whole fight).
+    for (const c of this.setup.player.consumables ?? []) {
+      if (c.kind !== 'passive') continue;
+      this.emit({
+        type: 'buffApplied',
+        source: PLAYER_ID,
+        target: PLAYER_ID,
+        meta: { buffId: c.id, consumable: true },
+      });
+    }
     if (this.setup.boss) installBoss(this);
     else installPack(this);
     this.scheduler.at(0, () => this.decide());
@@ -220,9 +240,18 @@ export class Fight {
     this.scheduler.in(Math.max(castMs, Math.round(GCD_MS * haste)), finish);
   }
 
+  /** Remaining uses for a charge-limited ability; Infinity when unlimited. */
+  private charges(ability: Ability): number {
+    if (ability.chargesPerFight === undefined) return Infinity;
+    return this.chargesLeft.get(ability.id) ?? ability.chargesPerFight;
+  }
+
   /** Apply an ability's effect now and start its cooldown. */
   resolveAbility(ability: Ability): void {
     const now = this.scheduler.now;
+    if (ability.chargesPerFight !== undefined) {
+      this.chargesLeft.set(ability.id, this.charges(ability) - 1);
+    }
     this.player.startCooldown(ability, now);
     this.emit({ type: 'castEnd', source: PLAYER_ID, meta: { abilityId: ability.id } });
     const effect = ability.effect;
@@ -343,9 +372,12 @@ export class Fight {
    */
   private maybeSchedulePotion(): void {
     const { stance, player } = this.setup;
+    // v1: at most one distinct active consumable exists (healing-potion), so
+    // `find` suffices; revisit when a second active kind joins the catalog.
     const potion = player.abilities.find((a) => a.tags.includes('consumable'));
     if (!potion || this.potionPending) return;
     if (this.player.hpPct * 100 >= stance.potionThresholdPct) return;
+    if (this.charges(potion) <= 0) return;
     if (!this.player.isReady(potion, this.scheduler.now)) return;
 
     this.potionPending = true;
@@ -357,6 +389,7 @@ export class Fight {
       this.potionPending = false;
       if (this.ended !== null || !this.player.alive) return;
       if (this.player.hpPct * 100 >= stance.potionThresholdPct) return;
+      if (this.charges(potion) <= 0) return;
       if (!this.player.isReady(potion, this.scheduler.now)) return;
       this.resolveAbility(potion);
     });

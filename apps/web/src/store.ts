@@ -1,6 +1,9 @@
 import {
+  CONSUMABLES_BY_ID,
+  CONSUMABLE_SLOTS,
   ITEMS_BY_ID,
   MAGE_TALENTS,
+  PLAYER_ID,
   levelForXp,
   makeBanditWarlord,
   makeCinderMaw,
@@ -29,21 +32,24 @@ import type {
   WorkerResponse,
 } from './sim/worker';
 import { advanceWorld } from './world/advance';
+import { RECIPES_BY_ID, RESPEC_COST, resolveConsumables } from './world/professions';
 import {
   BRIDGE_COST,
   DEFAULT_MULTIPLIER,
   GATHER_BLOCK_GAME_MS,
-  GATHER_RATE_PER_HOUR,
   GRIND_BLOCK_GAME_MS,
   MAX_CATCHUP_GAME_MS,
+  REGIONS,
   TRAVEL_HOP_GAME_MS,
   rateKey,
 } from './world/tasks';
 import type {
   AwaySummary,
   BossId,
+  CraftTask,
   GatherTask,
   GrindTask,
+  Inventory,
   Materials,
   RegionId,
   Task,
@@ -113,13 +119,19 @@ export function resolveGear(sel: GearSelection): Item[] {
     .filter((i): i is Item => Boolean(i));
 }
 
-/** A saved build: everything needed to re-apply it later (GDD §2 Loadouts).
- *  Consumable slots join when consumables exist (slice 5). */
+/** A saved build: everything needed to re-apply it later (GDD §2 Loadouts). */
 export interface Loadout {
   name: string;
   stance: StanceConfig;
   talents: string[];
   gear: GearSelection;
+  /** Equipped consumable slot ids (may repeat, e.g. 2× healing-potion). */
+  consumables: string[];
+}
+
+/** Repair a consumable slot list against current content and the slot cap. */
+export function sanitizeConsumableSelection(ids: string[]): string[] {
+  return ids.filter((id) => Boolean(CONSUMABLES_BY_ID[id])).slice(0, CONSUMABLE_SLOTS);
 }
 
 const TALENT_COSTS: Record<string, number> = Object.fromEntries(
@@ -168,10 +180,13 @@ interface Store {
   behavior: BehaviorOverrides;
   gear: GearSelection;
   talents: string[];
+  /** Equipped consumable slot ids ('' never stored; length ≤ CONSUMABLE_SLOTS). */
+  equippedConsumables: string[];
   loadouts: Loadout[];
   setStance: (patch: Partial<StanceConfig>) => void;
   setBehavior: (patch: Partial<BehaviorOverrides>) => void;
   setGear: (slot: GearSlot, itemId: string) => void;
+  setConsumableSlot: (slot: number, id: string) => void;
   applyAutoPreset: () => void;
   spendTalent: (id: string) => void;
   refundTalent: (id: string) => void;
@@ -201,6 +216,7 @@ interface Store {
   region: RegionId;
   unlocks: Unlocks;
   materials: Materials;
+  inventory: Inventory;
   queue: Task[];
   lastSeenWall: number;
   multiplier: number;
@@ -212,6 +228,7 @@ interface Store {
   enqueueTravel: (to: RegionId) => void;
   enqueueGrind: (zone: ZoneId) => void;
   enqueueGather: (zone: ZoneId) => void;
+  enqueueCraft: (recipeId: string, count: number) => void;
   cancelTask: (id: string) => void;
   tickWorld: () => void;
   catchUp: () => void;
@@ -267,10 +284,18 @@ export const useStore = create<Store>()(
         behavior: { ...DEFAULT_BEHAVIOR },
         gear: { ...DEFAULT_GEAR_SELECTION },
         talents: [],
+        equippedConsumables: [],
         loadouts: [],
         setStance: (patch) => set((s) => ({ stance: { ...s.stance, ...patch } })),
         setBehavior: (patch) => set((s) => ({ behavior: { ...s.behavior, ...patch } })),
         setGear: (slot, itemId) => set((s) => ({ gear: { ...s.gear, [slot]: itemId } })),
+        setConsumableSlot: (slot, id) =>
+          set((s) => {
+            if (slot < 0 || slot >= CONSUMABLE_SLOTS) return {};
+            const slots = Array.from({ length: CONSUMABLE_SLOTS }, (_, i) => s.equippedConsumables[i] ?? '');
+            slots[slot] = CONSUMABLES_BY_ID[id] ? id : '';
+            return { equippedConsumables: slots.filter((x) => x !== '') };
+          }),
         applyAutoPreset: () => set({ stance: { ...AUTO_PRESET } }),
 
         spendTalent: (id) =>
@@ -291,8 +316,21 @@ export const useStore = create<Store>()(
             const talents = s.talents.filter((t) => t !== id);
             return { talents, stance: stripLockedControls(s.stance, talents) };
           }),
-        // v1 respec is free; slice 5's economy attaches a resource cost here.
-        respecTalents: () => set((s) => ({ talents: [], stance: stripLockedControls(s.stance, []) })),
+        // Respec costs herbs (GDD §2 "small resource cost") — payable from the
+        // start region, so it's never a hard lock.
+        respecTalents: () =>
+          set((s) => {
+            if (s.talents.length === 0) return {};
+            if ((s.materials[RESPEC_COST.material] ?? 0) < RESPEC_COST.count) return {};
+            return {
+              talents: [],
+              stance: stripLockedControls(s.stance, []),
+              materials: {
+                ...s.materials,
+                [RESPEC_COST.material]: s.materials[RESPEC_COST.material] - RESPEC_COST.count,
+              },
+            };
+          }),
 
         saveLoadout: (name) =>
           set((s) => {
@@ -301,6 +339,7 @@ export const useStore = create<Store>()(
               stance: { ...s.stance },
               talents: [...s.talents],
               gear: { ...s.gear },
+              consumables: [...s.equippedConsumables],
             };
             const others = s.loadouts.filter((l) => l.name !== name);
             return { loadouts: [...others, loadout] };
@@ -319,22 +358,30 @@ export const useStore = create<Store>()(
             const gear = Object.fromEntries(
               Object.entries(saved.gear).map(([slot, id]) => [slot, ITEMS_BY_ID[id] ? id : '']),
             ) as GearSelection;
-            return { talents, gear, stance: stripLockedControls({ ...saved.stance }, talents) };
+            return {
+              talents,
+              gear,
+              stance: stripLockedControls({ ...saved.stance }, talents),
+              equippedConsumables: sanitizeConsumableSelection(saved.consumables ?? []),
+            };
           }),
         deleteLoadout: (name) =>
           set((s) => ({ loadouts: s.loadouts.filter((l) => l.name !== name) })),
 
         sim: { running: false, result: null },
         runSim: (iterations) => {
-          const { stance, behavior, gear, sim, xp, talents } = get();
+          const { stance, behavior, gear, sim, xp, talents, equippedConsumables } = get();
           if (sim.running) return;
           const id = nextId++;
+          // The dummy simulates the equipped slots for free at nominal charges
+          // (GDD §3) — results don't churn with stock levels.
           const request: SimRequest = {
             stance,
             behavior,
             gear,
             level: levelForXp(xp),
             talents,
+            consumables: [...equippedConsumables],
             iterations,
             baseSeed: SIM_BASE_SEED,
           };
@@ -345,13 +392,35 @@ export const useStore = create<Store>()(
 
         fight: null,
         pull: (bossId = 'cinder-maw') => {
-          const { stance, behavior, gear, xp, talents } = get();
+          const { stance, behavior, gear, xp, talents, equippedConsumables, inventory } = get();
           const seed = Math.floor(Math.random() * 2 ** 31);
-          const player = makeMage(behavior, resolveGear(gear), levelForXp(xp), talents);
+          // Slots the current stock can actually cover; short slots are
+          // skipped for this fight (never blocks the pull).
+          const defs = resolveConsumables(equippedConsumables, inventory);
+          const player = makeMage(behavior, resolveGear(gear), levelForXp(xp), talents, defs);
           const boss = (BOSS_FACTORIES[bossId] ?? makeCinderMaw)();
           const result = runFight({ player, boss, stance, seed });
+          // Real fights consume what they brought (GDD §3), win or lose:
+          // passives 1 per distinct granted id; potion charges from the event
+          // stream (the stream is the source of truth), capped by stock.
+          const spent: Inventory = {};
+          for (const def of defs) {
+            if (def.kind === 'passive') spent[def.id] = 1;
+          }
+          for (const def of defs) {
+            if (def.kind !== 'active' || spent[def.id] !== undefined) continue;
+            const used = result.events.filter(
+              (e) => e.type === 'heal' && e.source === PLAYER_ID && e.meta?.['abilityId'] === def.ability.id,
+            ).length;
+            spent[def.id] = Math.min(used, inventory[def.id] ?? 0);
+          }
+          const nextInventory = { ...inventory };
+          for (const [id, n] of Object.entries(spent)) {
+            if (n > 0) nextInventory[id] = Math.max(0, (nextInventory[id] ?? 0) - n);
+          }
           set({
             fight: { result, seed, player, boss, bossId },
+            inventory: nextInventory,
             playT: 0,
             playing: true,
             speed: 1,
@@ -370,7 +439,8 @@ export const useStore = create<Store>()(
         xp: 0,
         region: 'heartfield',
         unlocks: { ...DEFAULT_UNLOCKS },
-        materials: { bridgeTimber: 0 },
+        materials: { bridgeTimber: 0, sunleaf: 0, emberbloom: 0 },
+        inventory: {},
         queue: [],
         lastSeenWall: Date.now(),
         multiplier: DEFAULT_MULTIPLIER,
@@ -422,6 +492,8 @@ export const useStore = create<Store>()(
 
         enqueueGather: (zone) =>
           set((s) => {
+            const meta = REGIONS.find((r) => r.id === zone)?.gather;
+            if (!meta) return {};
             const next = [...s.queue];
             if (projectedRegion(next, s.region) !== zone) {
               next.push({ id: uid(), kind: 'travel', to: zone, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 });
@@ -430,15 +502,61 @@ export const useStore = create<Store>()(
               id: uid(),
               kind: 'gather',
               zone,
-              material: 'bridgeTimber',
-              ratePerHour: GATHER_RATE_PER_HOUR,
+              material: meta.material,
+              ratePerHour: meta.ratePerHour,
               durationGameMs: GATHER_BLOCK_GAME_MS,
               accruedGameMs: 0,
             };
             return { queue: [...next, gather] };
           }),
 
-        cancelTask: (id) => set((s) => ({ queue: s.queue.filter((t) => t.id !== id) })),
+        // Crafting runs anywhere in v1 (no travel hop); the slice-6 workshop
+        // will gate/upgrade it. Herbs for ALL units are paid at enqueue.
+        enqueueCraft: (recipeId, count) =>
+          set((s) => {
+            const recipe = RECIPES_BY_ID[recipeId];
+            if (!recipe || count < 1 || !Number.isInteger(count)) return {};
+            const materials = { ...s.materials };
+            for (const [herb, per] of Object.entries(recipe.herbs)) {
+              const need = per * count;
+              if ((materials[herb as keyof Materials] ?? 0) < need) return {};
+              materials[herb as keyof Materials] -= need;
+            }
+            const craft: CraftTask = {
+              id: uid(),
+              kind: 'craft',
+              recipeId,
+              count,
+              unitGameMs: recipe.unitGameMs,
+              producedUnits: 0,
+              durationGameMs: recipe.unitGameMs * count,
+              accruedGameMs: 0,
+            };
+            return { materials, queue: [...s.queue, craft] };
+          }),
+
+        cancelTask: (id) =>
+          set((s) => {
+            const t = s.queue.find((task) => task.id === id);
+            if (!t) return {};
+            const queue = s.queue.filter((task) => task.id !== id);
+            // Cancelling a craft refunds herbs for units not yet started;
+            // the in-progress unit's herbs are lost, produced units stay.
+            if (t.kind === 'craft') {
+              const recipe = RECIPES_BY_ID[t.recipeId];
+              const started = Math.ceil(t.accruedGameMs / t.unitGameMs);
+              const refundUnits = Math.max(0, t.count - Math.max(started, t.producedUnits));
+              if (recipe && refundUnits > 0) {
+                const materials = { ...s.materials };
+                for (const [herb, per] of Object.entries(recipe.herbs)) {
+                  materials[herb as keyof Materials] =
+                    (materials[herb as keyof Materials] ?? 0) + per * refundUnits;
+                }
+                return { queue, materials };
+              }
+            }
+            return { queue };
+          }),
 
         tickWorld: () =>
           set((s) => {
@@ -487,18 +605,20 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
         behavior: s.behavior,
         gear: s.gear,
         talents: s.talents,
+        equippedConsumables: s.equippedConsumables,
         loadouts: s.loadouts,
         xp: s.xp,
         region: s.region,
         unlocks: s.unlocks,
         materials: s.materials,
+        inventory: s.inventory,
         queue: s.queue,
         lastSeenWall: s.lastSeenWall,
         multiplier: s.multiplier,
@@ -509,12 +629,25 @@ export const useStore = create<Store>()(
           s.talents = [];
           s.loadouts = [];
         }
+        if (version < 3) {
+          // Slice 5: professions/consumables join. Backfill herb keys so the
+          // reducer's `+=` never sees undefined; old task kinds carry forward.
+          s.inventory = {};
+          s.equippedConsumables = [];
+          s.loadouts = (s.loadouts ?? []).map((l) => ({ ...l, consumables: [] }));
+        }
+        s.materials = { bridgeTimber: 0, sunleaf: 0, emberbloom: 0, ...(s.materials ?? {}) };
         // Repair against current content — talent ids may have changed.
         s.talents = sanitizeTalentSelection(
           MAGE_TALENTS,
           s.talents ?? [],
           talentPointsForLevel(levelForXp(s.xp ?? 0)),
         );
+        s.equippedConsumables = sanitizeConsumableSelection(s.equippedConsumables ?? []);
+        s.loadouts = (s.loadouts ?? []).map((l) => ({
+          ...l,
+          consumables: sanitizeConsumableSelection(l.consumables ?? []),
+        }));
         return s;
       },
     },
@@ -529,12 +662,14 @@ export function simIsStale(
   gear: GearSelection,
   level: number,
   talents: string[],
+  consumables: string[],
 ): boolean {
   if (!sim.result) return false;
   const r = sim.result.request;
   return (
     r.level !== level ||
     r.talents.join(',') !== talents.join(',') ||
+    r.consumables.join(',') !== consumables.join(',') ||
     Object.entries(gear).some(([slot, id]) => r.gear[slot as GearSlot] !== id) ||
     r.behavior.discipline !== behavior.discipline ||
     r.behavior.aoeEfficiency !== behavior.aoeEfficiency ||
