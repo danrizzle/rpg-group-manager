@@ -1,0 +1,11 @@
+services:
+  dev:
+    build: .
+    image: rpg-group-manager-dev
+    user: "1000:1000"
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "5174:5173"
+    command: bash

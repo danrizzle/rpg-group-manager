@@ -1,0 +1,21 @@
+// Public API of the combat sim engine (phase 1).
+export { Rng } from './core/rng';
+export { Scheduler } from './core/scheduler';
+export type { ActorId, CombatEvent, EventType } from './core/events';
+export type { BehaviorStats, CombatStats, DamageType } from './model/stats';
+export { GCD_MS } from './model/ability';
+export type { Ability, AbilityEffect, AbilityTag } from './model/ability';
+export { DEFAULT_STANCE, validateStance } from './model/stance';
+export type { StanceConfig } from './model/stance';
+export type { AddDefinition, BossDefinition, TimedBossAbility } from './model/boss';
+export { runFight, PLAYER_ID, BOSS_ID } from './sim/engine';
+export type { CharacterDef, FightResult, FightResultKind, FightSetup } from './sim/engine';
+export { reactionTimeMs, mistakeChance } from './sim/mistakes';
+export { makeMage } from './content/classes/mage';
+export { makeCinderMaw } from './content/bosses/cinderMaw';
+export { summarizeRun, formatEvents } from './analysis/metrics';
+export type { RunSummary } from './analysis/metrics';
+export { runMonteCarlo } from './analysis/montecarlo';
+export type { MonteCarloResult } from './analysis/montecarlo';
+export { distribution } from './analysis/distribution';
+export type { Distribution } from './analysis/distribution';

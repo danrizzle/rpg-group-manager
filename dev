@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Run any command inside the dev container, e.g.:
+#   ./dev pnpm install
+#   ./dev pnpm test
+#   ./dev pnpm --filter @rpg/engine cli -- --n 5000
+set -euo pipefail
+cd "$(dirname "$0")"
+exec docker compose run --rm dev "$@"

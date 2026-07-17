@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Start the browser prototype dev server (http://localhost:5174) in the container.
+set -euo pipefail
+cd "$(dirname "$0")"
+exec docker compose run --rm --service-ports dev pnpm --filter @rpg/web dev
