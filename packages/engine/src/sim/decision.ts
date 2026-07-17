@@ -47,6 +47,12 @@ export function chooseAction(ctx: DecisionContext): Ability | null {
   // defensive the stance. Competes against the best damage score (~1.0).
   for (const a of ctx.ready) {
     if (!a.tags.includes('defensive')) continue;
+    if ((ctx.stance.barrierPolicy ?? 'reactive') === 'proactive') {
+      // Proactive: recast whenever ready. Damage scores are normalized ≤ 1
+      // and the reactive weight caps at 1.8, so 2 always wins the GCD.
+      scored.set(a, 2);
+      continue;
+    }
     // At full offense the weight can never beat the best damage score —
     // glass cannon is a real stance choice, not a rounding artifact.
     const weight = 0.6 + 1.2 * (1 - ctx.stance.offense);

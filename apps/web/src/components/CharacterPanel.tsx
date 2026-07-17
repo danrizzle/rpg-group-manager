@@ -1,5 +1,6 @@
 import {
   LEVEL_CAP,
+  MAGE_TALENTS,
   UNLOCKS,
   intentsUpToLevel,
   itemsForSlot,
@@ -8,12 +9,15 @@ import {
   mistakeChance,
   reactionTimeMs,
   totalXpToReach,
+  unlockedControls,
   xpToNext,
   type GearSlot,
   type ItemBonuses,
 } from '@rpg/engine';
 import { useMemo } from 'react';
 import { POTION_STEPS, resolveGear, STANCES, TARGET_STEPS, useStore } from '../store';
+import { LoadoutPanel } from './LoadoutPanel';
+import { TalentPanel } from './TalentPanel';
 
 const SLOTS: { slot: GearSlot; label: string }[] = [
   { slot: 'weapon', label: 'Weapon' },
@@ -77,8 +81,12 @@ export function CharacterPanel() {
   const gear = useStore((s) => s.gear);
   const setGear = useStore((s) => s.setGear);
   const xp = useStore((s) => s.xp);
+  const talents = useStore((s) => s.talents);
   const level = levelForXp(xp);
-  const mage = useMemo(() => makeMage(behavior, resolveGear(gear), level), [behavior, gear, level]);
+  const mage = useMemo(
+    () => makeMage(behavior, resolveGear(gear), level, talents),
+    [behavior, gear, level, talents],
+  );
 
   const activeStance = STANCES.find((st) => st.offense === stance.offense);
   const fireRes = mage.stats.resistances.fire ?? 0;
@@ -88,6 +96,7 @@ export function CharacterPanel() {
   const targetsUnlocked = intents.has('target-steps');
   const potionUnlocked = intents.has('potion-threshold');
   const burstUnlocked = intents.has('burst-cd-control');
+  const barrierUnlocked = unlockedControls(MAGE_TALENTS, talents).has('barrier-policy');
 
   // XP bar: progress within the current level (cap shows full).
   const atCap = level >= LEVEL_CAP;
@@ -182,6 +191,19 @@ export function CharacterPanel() {
         </select>
       </div>
 
+      <div className="control">
+        <div className="control-label">Barrier policy</div>
+        <select
+          value={stance.barrierPolicy ?? 'reactive'}
+          disabled={!barrierUnlocked}
+          onChange={(e) => setStance({ barrierPolicy: e.target.value as 'reactive' | 'proactive' })}
+        >
+          <option value="reactive">reactive (when hurt)</option>
+          <option value="proactive">proactive (on cooldown)</option>
+        </select>
+        {!barrierUnlocked && <div className="control-desc">locked — requires the Glacial Barrier talent</div>}
+      </div>
+
       <h3>Gear</h3>
       {SLOTS.map(({ slot, label }) => (
         <div className="control" key={slot}>
@@ -196,6 +218,8 @@ export function CharacterPanel() {
           </select>
         </div>
       ))}
+
+      <TalentPanel level={level} />
 
       <h3>Earned stats</h3>
       <p className="muted">
@@ -252,6 +276,8 @@ export function CharacterPanel() {
           Next at level {nextUnlock.level}: {[...nextUnlock.abilities, ...nextUnlock.intents].join(', ')}
         </p>
       )}
+
+      <LoadoutPanel />
     </section>
   );
 }

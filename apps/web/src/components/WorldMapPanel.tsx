@@ -10,13 +10,14 @@ export function WorldMapPanel() {
   const gear = useStore((s) => s.gear);
   const stance = useStore((s) => s.stance);
   const behavior = useStore((s) => s.behavior);
+  const talents = useStore((s) => s.talents);
   const region = useStore((s) => s.region);
   const multiplier = useStore((s) => s.multiplier);
   const setMultiplier = useStore((s) => s.setMultiplier);
   const requestGrindRates = useStore((s) => s.requestGrindRates);
 
   const level = levelForXp(xp);
-  const build = buildHash(gear, stance, behavior);
+  const build = buildHash(gear, stance, behavior, talents);
 
   // Warm the per-zone rate cache for the current build (deduped in the store).
   useEffect(() => {

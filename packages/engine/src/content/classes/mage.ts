@@ -3,7 +3,9 @@ import type { Ability } from '../../model/ability';
 import type { BehaviorStats } from '../../model/stats';
 import { applyGear, type Item } from '../../model/item';
 import { LEVEL_CAP, abilitiesUpToLevel, nakedBaseForLevel } from '../../model/progression';
+import { applyTalents, talentPointsForLevel, validateTalentSelection } from '../../model/talent';
 import { GEAR_SETS } from '../items';
+import { MAGE_TALENTS } from './mageTalents';
 
 /**
  * v1 test kit: the Mage (GDD §2) — the class with the clearest
@@ -82,17 +84,21 @@ export function makeMage(
   behaviorOverride?: Partial<BehaviorStats>,
   gear: Item[] = GEAR_SETS['default']!,
   level: number = LEVEL_CAP,
+  talents: string[] = [],
 ): CharacterDef {
-  const { stats, behavior } = applyGear(
+  const geared = applyGear(
     nakedBaseForLevel(level),
     { ...BASE_BEHAVIOR, ...behaviorOverride },
     gear,
   );
   const learned = new Set(abilitiesUpToLevel(level));
-  return {
-    name: 'Elara',
-    stats,
-    behavior,
-    abilities: FULL_KIT.filter((a) => learned.has(a.id)),
-  };
+  validateTalentSelection(MAGE_TALENTS, talents, talentPointsForLevel(level));
+  const { stats, behavior, abilities } = applyTalents(
+    geared.stats,
+    geared.behavior,
+    FULL_KIT.filter((a) => learned.has(a.id)),
+    MAGE_TALENTS,
+    talents,
+  );
+  return { name: 'Elara', stats, behavior, abilities };
 }

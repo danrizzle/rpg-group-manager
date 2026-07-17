@@ -1,11 +1,15 @@
 import {
   ITEMS_BY_ID,
+  MAGE_TALENTS,
   levelForXp,
   makeBanditWarlord,
   makeCinderMaw,
   makeEmberwing,
   makeMage,
   runFight,
+  sanitizeTalentSelection,
+  talentPointsForLevel,
+  unlockedControls,
   type BossDefinition,
   type CharacterDef,
   type FightResult,
@@ -109,6 +113,34 @@ export function resolveGear(sel: GearSelection): Item[] {
     .filter((i): i is Item => Boolean(i));
 }
 
+/** A saved build: everything needed to re-apply it later (GDD §2 Loadouts).
+ *  Consumable slots join when consumables exist (slice 5). */
+export interface Loadout {
+  name: string;
+  stance: StanceConfig;
+  talents: string[];
+  gear: GearSelection;
+}
+
+const TALENT_COSTS: Record<string, number> = Object.fromEntries(
+  MAGE_TALENTS.nodes.map((n) => [n.id, n.cost]),
+);
+
+/** Points left to spend for a selection at the given level. */
+export function talentPointsRemaining(talents: string[], level: number): number {
+  const spent = talents.reduce((sum, id) => sum + (TALENT_COSTS[id] ?? 0), 0);
+  return talentPointsForLevel(level) - spent;
+}
+
+/** Drop stance settings whose unlocking talent isn't in the selection. */
+function stripLockedControls(stance: StanceConfig, talents: string[]): StanceConfig {
+  if (stance.barrierPolicy && !unlockedControls(MAGE_TALENTS, talents).has('barrier-policy')) {
+    const { barrierPolicy: _, ...rest } = stance;
+    return rest;
+  }
+  return stance;
+}
+
 const BOSS_FACTORIES: Record<string, () => BossDefinition> = {
   'cinder-maw': makeCinderMaw,
   'bandit-warlord': makeBanditWarlord,
@@ -135,10 +167,18 @@ interface Store {
   stance: StanceConfig;
   behavior: BehaviorOverrides;
   gear: GearSelection;
+  talents: string[];
+  loadouts: Loadout[];
   setStance: (patch: Partial<StanceConfig>) => void;
   setBehavior: (patch: Partial<BehaviorOverrides>) => void;
   setGear: (slot: GearSlot, itemId: string) => void;
   applyAutoPreset: () => void;
+  spendTalent: (id: string) => void;
+  refundTalent: (id: string) => void;
+  respecTalents: () => void;
+  saveLoadout: (name: string) => void;
+  applyLoadout: (name: string) => void;
+  deleteLoadout: (name: string) => void;
 
   // --- training dummy (worker) ---
   sim: SimState;
@@ -226,14 +266,67 @@ export const useStore = create<Store>()(
         stance: { ...AUTO_PRESET },
         behavior: { ...DEFAULT_BEHAVIOR },
         gear: { ...DEFAULT_GEAR_SELECTION },
+        talents: [],
+        loadouts: [],
         setStance: (patch) => set((s) => ({ stance: { ...s.stance, ...patch } })),
         setBehavior: (patch) => set((s) => ({ behavior: { ...s.behavior, ...patch } })),
         setGear: (slot, itemId) => set((s) => ({ gear: { ...s.gear, [slot]: itemId } })),
         applyAutoPreset: () => set({ stance: { ...AUTO_PRESET } }),
 
+        spendTalent: (id) =>
+          set((s) => {
+            const node = MAGE_TALENTS.nodes.find((n) => n.id === id);
+            if (!node || s.talents.includes(id)) return {};
+            if ((node.requires ?? []).some((req) => !s.talents.includes(req))) return {};
+            if (node.cost > talentPointsRemaining(s.talents, levelForXp(s.xp))) return {};
+            return { talents: [...s.talents, id] };
+          }),
+        refundTalent: (id) =>
+          set((s) => {
+            if (!s.talents.includes(id)) return {};
+            const dependent = MAGE_TALENTS.nodes.some(
+              (n) => s.talents.includes(n.id) && (n.requires ?? []).includes(id),
+            );
+            if (dependent) return {};
+            const talents = s.talents.filter((t) => t !== id);
+            return { talents, stance: stripLockedControls(s.stance, talents) };
+          }),
+        // v1 respec is free; slice 5's economy attaches a resource cost here.
+        respecTalents: () => set((s) => ({ talents: [], stance: stripLockedControls(s.stance, []) })),
+
+        saveLoadout: (name) =>
+          set((s) => {
+            const loadout: Loadout = {
+              name,
+              stance: { ...s.stance },
+              talents: [...s.talents],
+              gear: { ...s.gear },
+            };
+            const others = s.loadouts.filter((l) => l.name !== name);
+            return { loadouts: [...others, loadout] };
+          }),
+        applyLoadout: (name) =>
+          set((s) => {
+            const saved = s.loadouts.find((l) => l.name === name);
+            if (!saved) return {};
+            // The stored loadout is never mutated; the applied copy is repaired
+            // against current content and the current level's point budget.
+            const talents = sanitizeTalentSelection(
+              MAGE_TALENTS,
+              saved.talents,
+              talentPointsForLevel(levelForXp(s.xp)),
+            );
+            const gear = Object.fromEntries(
+              Object.entries(saved.gear).map(([slot, id]) => [slot, ITEMS_BY_ID[id] ? id : '']),
+            ) as GearSelection;
+            return { talents, gear, stance: stripLockedControls({ ...saved.stance }, talents) };
+          }),
+        deleteLoadout: (name) =>
+          set((s) => ({ loadouts: s.loadouts.filter((l) => l.name !== name) })),
+
         sim: { running: false, result: null },
         runSim: (iterations) => {
-          const { stance, behavior, gear, sim, xp } = get();
+          const { stance, behavior, gear, sim, xp, talents } = get();
           if (sim.running) return;
           const id = nextId++;
           const request: SimRequest = {
@@ -241,6 +334,7 @@ export const useStore = create<Store>()(
             behavior,
             gear,
             level: levelForXp(xp),
+            talents,
             iterations,
             baseSeed: SIM_BASE_SEED,
           };
@@ -251,9 +345,9 @@ export const useStore = create<Store>()(
 
         fight: null,
         pull: (bossId = 'cinder-maw') => {
-          const { stance, behavior, gear, xp } = get();
+          const { stance, behavior, gear, xp, talents } = get();
           const seed = Math.floor(Math.random() * 2 ** 31);
-          const player = makeMage(behavior, resolveGear(gear), levelForXp(xp));
+          const player = makeMage(behavior, resolveGear(gear), levelForXp(xp), talents);
           const boss = (BOSS_FACTORIES[bossId] ?? makeCinderMaw)();
           const result = runFight({ player, boss, stance, seed });
           set({
@@ -286,14 +380,14 @@ export const useStore = create<Store>()(
 
         rateCache: {},
         requestGrindRates: (zone) => {
-          const { gear, stance, behavior, xp, rateCache } = get();
+          const { gear, stance, behavior, xp, talents, rateCache } = get();
           const level = levelForXp(xp);
-          const key = rateKey(zone, level, gear, stance, behavior);
+          const key = rateKey(zone, level, gear, stance, behavior, talents);
           if (rateCache[key] || inFlightGrind.has(key)) return;
           const id = nextId++;
           pendingGrindKey.set(id, key);
           inFlightGrind.add(key);
-          const req: GrindRequest = { zone, stance, behavior, gear, level, iterations: 300, baseSeed: SIM_BASE_SEED };
+          const req: GrindRequest = { zone, stance, behavior, gear, level, talents, iterations: 300, baseSeed: SIM_BASE_SEED };
           post({ kind: 'grind', id, req });
         },
 
@@ -305,9 +399,9 @@ export const useStore = create<Store>()(
           }),
 
         enqueueGrind: (zone) => {
-          const { gear, stance, behavior, xp, rateCache, queue, region } = get();
+          const { gear, stance, behavior, xp, talents, rateCache, queue, region } = get();
           const level = levelForXp(xp);
-          const rate = rateCache[rateKey(zone, level, gear, stance, behavior)];
+          const rate = rateCache[rateKey(zone, level, gear, stance, behavior, talents)];
           if (!rate) return; // card keeps the button disabled until the rate is known
           const next = [...queue];
           if (projectedRegion(next, region) !== zone) {
@@ -393,12 +487,14 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
         behavior: s.behavior,
         gear: s.gear,
+        talents: s.talents,
+        loadouts: s.loadouts,
         xp: s.xp,
         region: s.region,
         unlocks: s.unlocks,
@@ -407,6 +503,20 @@ export const useStore = create<Store>()(
         lastSeenWall: s.lastSeenWall,
         multiplier: s.multiplier,
       }),
+      migrate: (persisted, version) => {
+        const s = persisted as Partial<Store>;
+        if (version < 2) {
+          s.talents = [];
+          s.loadouts = [];
+        }
+        // Repair against current content — talent ids may have changed.
+        s.talents = sanitizeTalentSelection(
+          MAGE_TALENTS,
+          s.talents ?? [],
+          talentPointsForLevel(levelForXp(s.xp ?? 0)),
+        );
+        return s;
+      },
     },
   ),
 );
@@ -418,11 +528,13 @@ export function simIsStale(
   behavior: BehaviorOverrides,
   gear: GearSelection,
   level: number,
+  talents: string[],
 ): boolean {
   if (!sim.result) return false;
   const r = sim.result.request;
   return (
     r.level !== level ||
+    r.talents.join(',') !== talents.join(',') ||
     Object.entries(gear).some(([slot, id]) => r.gear[slot as GearSlot] !== id) ||
     r.behavior.discipline !== behavior.discipline ||
     r.behavior.aoeEfficiency !== behavior.aoeEfficiency ||
@@ -430,6 +542,7 @@ export function simIsStale(
     r.stance.offense !== stance.offense ||
     r.stance.targeting !== stance.targeting ||
     r.stance.potionThresholdPct !== stance.potionThresholdPct ||
-    r.stance.burstCds !== stance.burstCds
+    r.stance.burstCds !== stance.burstCds ||
+    (r.stance.barrierPolicy ?? 'reactive') !== (stance.barrierPolicy ?? 'reactive')
   );
 }

@@ -82,6 +82,16 @@ body {
   border: 1px solid var(--panel-edge); border-radius: 4px; padding: 4px;
 }
 
+/* Loadouts */
+.loadout-save { display: flex; gap: 4px; margin: 6px 0; }
+.loadout-save input {
+  flex: 1; background: var(--bg); color: var(--ink-2);
+  border: 1px solid var(--panel-edge); border-radius: 4px; padding: 4px 8px; font-size: 13px;
+}
+.loadout-list { list-style: none; margin: 0; padding: 0; }
+.loadout-row { display: flex; align-items: center; gap: 4px; padding: 3px 0; }
+.loadout-name { flex: 1; color: var(--ink); }
+
 .ability-list { list-style: none; margin: 0; padding: 0; }
 .ability-list li { padding: 3px 0; display: flex; flex-direction: column; }
 .ability-name { color: var(--ink); }

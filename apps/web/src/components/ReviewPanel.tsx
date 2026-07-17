@@ -23,7 +23,8 @@ export function ReviewPanel() {
   const behavior = useStore((s) => s.behavior);
   const gear = useStore((s) => s.gear);
   const xp = useStore((s) => s.xp);
-  const stale = simIsStale(sim, stance, behavior, gear, levelForXp(xp));
+  const talents = useStore((s) => s.talents);
+  const stale = simIsStale(sim, stance, behavior, gear, levelForXp(xp), talents);
   const r = sim.result;
 
   return (

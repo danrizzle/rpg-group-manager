@@ -35,6 +35,7 @@ export interface SimRequest {
   behavior: BehaviorInput;
   gear: Record<GearSlot, string>;
   level: number;
+  talents: string[];
   iterations: number;
   baseSeed: number;
 }
@@ -58,6 +59,7 @@ export interface GrindRequest {
   behavior: BehaviorInput;
   gear: Record<GearSlot, string>;
   level: number;
+  talents: string[];
   iterations: number;
   baseSeed: number;
 }
@@ -81,7 +83,7 @@ function runSim(req: SimRequest): SimResponse {
   const items = resolveItems(req.gear);
   const started = performance.now();
   const result = runMonteCarlo(
-    { player: makeMage(req.behavior, items, req.level), boss: makeCinderMaw(), stance: req.stance },
+    { player: makeMage(req.behavior, items, req.level, req.talents), boss: makeCinderMaw(), stance: req.stance },
     req.iterations,
     req.baseSeed,
   );
@@ -103,7 +105,7 @@ function runGrind(req: GrindRequest): GrindResponse {
   const items = resolveItems(req.gear);
   const pack = ZONES[req.zone]!();
   const raw = grindRates(
-    { player: makeMage(req.behavior, items, req.level), stance: req.stance, pack },
+    { player: makeMage(req.behavior, items, req.level, req.talents), stance: req.stance, pack },
     DEFAULT_PULL_CYCLE,
     req.iterations,
     req.baseSeed,

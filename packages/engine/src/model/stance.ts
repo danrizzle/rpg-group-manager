@@ -11,6 +11,12 @@ export interface StanceConfig {
   potionThresholdPct: number;
   /** Unlockable slider — v1 supports 'automatic' only; the enum is the extension point. */
   burstCds: 'automatic' | 'save-for-plan-window';
+  /**
+   * Talent-unlocked (Glacial Barrier): proactive keeps defensives on
+   * cooldown (~full uptime) at the cost of the GCDs spent recasting.
+   * Absent = reactive.
+   */
+  barrierPolicy?: 'reactive' | 'proactive';
 }
 
 export const DEFAULT_STANCE: StanceConfig = {
@@ -26,5 +32,8 @@ export function validateStance(s: StanceConfig): void {
   if (!in01(s.targeting)) throw new Error(`targeting out of range: ${s.targeting}`);
   if (s.potionThresholdPct < 0 || s.potionThresholdPct > 100) {
     throw new Error(`potionThresholdPct out of range: ${s.potionThresholdPct}`);
+  }
+  if (s.barrierPolicy !== undefined && s.barrierPolicy !== 'reactive' && s.barrierPolicy !== 'proactive') {
+    throw new Error(`invalid barrierPolicy: ${s.barrierPolicy}`);
   }
 }

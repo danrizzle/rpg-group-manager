@@ -2,8 +2,8 @@
 
 > Update this file whenever a slice lands. Roadmap definition: DESIGN.md §10.
 
-**Current phase: 3 (Progression), slices 1–3 of 6 done; world & leveling
-design done (GDD v0.4) — next up: slice 4 (talents).**
+**Current phase: 3 (Progression), slices 1–4 of 6 done; world & leveling
+design done (GDD v0.4) — next up: slice 5 (professions v1).**
 As of July 2026.
 
 ## Phase checklist
@@ -43,67 +43,35 @@ As of July 2026.
         (progression/unlocks/queue/lastSeen only). CharacterPanel: level/XP bar
         + unlock-arc gating of intents/abilities. Engine unchanged — the web
         now threads `level` into `makeMage`.
-  - [ ] **Slice 4 — Talents + loadouts (engine + web).** Implement DESIGN.md
-        §2 "Talents & Skill Trees" + "Loadouts". Talents arrive at the cap
-        (level 10) and deepen the intents leveling taught; they deliver three
-        things (§2): **numbers** (spell power, crit, haste, HP, armor),
-        **behavior stats** (discipline, aoeEfficiency, damageWhileMoving), and
-        **new behavior controls** (new *discrete named* intent options, §3 —
-        never sliders). Respec allowed; loadouts save a full build for reuse.
-
-        **Engine first** (`packages/engine`, pure/deterministic — the usual
-        rules):
-        - New `model/talent.ts`: declarative `TalentNode { id, name, tier,
-          cost, requires?: string[], effects: TalentEffect[] }` where
-          `TalentEffect` is a union — `{kind:'stat', stat, add}` (CombatStats
-          number), `{kind:'behavior', stat, add}` (BehaviorStats),
-          `{kind:'ability', abilityId}` (grant/modify kit), `{kind:'control',
-          control}` (unlock a new intent option). Content in
-          `content/classes/mageTalents.ts`: a small v1 Mage tree (~3 tiers,
-          representative — tune numbers via the CLI/sim, not by hand). Placeholder
-          talent-point pool granted at cap (e.g. a flat pool; note it's tunable).
-        - Pure `applyTalents(stats, behavior, kit, controls, nodeIds)` folding
-          talent effects on top of gear (mirror `applyGear` in `model/item.ts`),
-          returning augmented stats/behavior/kit + the set of unlocked controls.
-          Thread a `talents: string[] = []` param through `makeMage` (4th arg,
-          backward-compatible like `level` was) → `nakedBaseForLevel` → gear →
-          talents. Export `applyTalents`, the tree, and a talent-points helper.
-        - **Implement ONE new behavior control end-to-end** as the proof the
-          framework is real (like slices 2–3 shipped a mechanism + one instance).
-          Do NOT use `burstCds:'save-for-plan-window'` — it needs the phase-4
-          plan window and would just hold burst forever. Instead add a
-          sim-effective control, e.g. `barrierPolicy: 'reactive' | 'proactive'`
-          on `StanceConfig` (optional, default reactive; unlocked by a talent):
-          proactive keeps Ice Barrier on ~full uptime (survival ↑, a GCD of DPS ↓)
-          — a real dual-solubility lever (§2 law 3). Wire it in
-          `sim/decision.ts`/`sim/engine.ts` and CLI flags.
-        - Tests (`packages/engine/test/`): applyTalents folds deltas correctly;
-          a throughput build raises DPS and a defensive/`proactive` build raises
-          survival vs. no talents; determinism holds. Keep the 44 existing green
-          (default `makeMage()` = no talents = unchanged).
-
-        **Then web** (`apps/web`):
-        - Thread `talents` into every `makeMage` call site (store `pull`,
-          CharacterPanel `useMemo`, `sim/worker.ts` `SimRequest` + grind
-          `GrindRequest`; extend `simIsStale`/`rateKey`) exactly as `level` was
-          in slice 3.
-        - Talent tree UI (a CharacterPanel section or new panel): nodes by tier,
-          points remaining, spend/refund, **Respec** (v1 free — real resource
-          cost lands with slice 5's economy; leave the hook). Data-driven `.map`
-          over the tree like the existing `STANCES` controls; reuse `.chip`/`.btn`.
-          Talent-unlocked controls surface new intent options in the intent panel
-          (e.g. a Barrier-policy dropdown appears once its talent is taken),
-          gated the same way slice 3 gates by unlock arc.
-        - **Loadouts** (§2): store `loadouts: {name, stance, talents, gear}[]`
-          + `saveLoadout/applyLoadout/deleteLoadout`, persisted via the existing
-          `persist` partialize. UI to save the current build, apply, and delete.
-          (Consumable slots are part of a loadout in the GDD but deferred to
-          slice 5 when consumables exist — note it.)
-        - Verify: engine tests + web typecheck/build; in-browser (chrome-devtools
-          MCP) — at cap, spend talents and see stats change + the new control
-          appear + a build raise the training-dummy kill%; save a loadout, tweak
-          the build, re-apply it, reload and confirm it persisted.
-        - Commit engine and web as one slice (repo convention); update this file.
+  - [x] **Slice 4 — Talents + loadouts (engine + web).** DESIGN.md §2
+        "Talents & Skill Trees" + "Loadouts". Engine: declarative
+        `model/talent.ts` (`TalentNode`/`TalentEffect` union — stat, behavior,
+        ability grant, control unlock; `TalentTree` carries granted-ability
+        defs so content stays data). Pure `applyTalents` folds effects on top
+        of gear (mirrors `applyGear`, same clamps); `makeMage(…, talents=[])`
+        4th arg, backward-compatible; `validateTalentSelection` throws (engine)
+        / `sanitizeTalentSelection` repairs (web boundaries);
+        `talentPointsForLevel` grants a flat 8-point pool at cap (tunable). v1
+        Mage tree (`content/classes/mageTalents.ts`): 9 nodes × 3 tiers,
+        total cost 13 vs pool 8 → real path choices; named `TALENT_BUILDS`
+        throughput/defense. **New behavior control end-to-end:**
+        `barrierPolicy: 'reactive'|'proactive'` on `StanceConfig` (optional;
+        absent = reactive, byte-identical streams), unlocked by the Glacial
+        Barrier talent; proactive scores defensives at a fixed 2 in
+        `sim/decision.ts` (> any damage score) → ~full Ice Barrier uptime.
+        Capstone ability grant: Pyroclasm (2nd burst CD, generic buff
+        machinery, zero engine changes). CLI: `--talents <build|id,…>`,
+        `--barrier`. 13 new tests (fold/clamps, tree integrity, validation,
+        sanitize, MC direction both builds, determinism); 57 total green.
+        Web: `talents` threaded through all `makeMage` sites + worker
+        requests + `rateKey`/`simIsStale` (as `level` was in slice 3);
+        talent tree UI in CharacterPanel (tier rows, points chip,
+        spend/refund, free Respec — slice 5 economy hook noted); Barrier
+        policy dropdown gated by the talent; loadouts
+        (`{name, stance, talents, gear}` save/apply/delete, apply sanitizes
+        vs current budget and strips locked controls; consumable slots join
+        in slice 5); persist v2 migration. Verified in-browser: spend →
+        stats/kill% move, control unlocks, loadout survives respec + reload.
   - [ ] Slice 5 — Professions v1 (herbalism→alchemy loop feeding consumables)
   - [ ] Slice 6 — Home base v1 (bank, workshops, training arena)
 - [ ] **Phase 4 — Group content**: 3–5-char dungeon, trinity (Warrior/Priest
@@ -161,6 +129,18 @@ Known gaps / deferred items:
 - Deaths at full defaults are rare (~0.5%); revisit survival pressure when
   levels/consumables land.
 
+## Balance state (talents, slice 4 — placeholder numbers)
+
+- Throughput build (7 pts, +8 SP/+5% crit/Pyroclasm): starter gear vs Cinder
+  Maw 11.8% → **99.1%** kill (`--n 2000`) — +12% DPS (150→168) explodes kill
+  rate because starter sits right at the enrage wall; likely too strong for a
+  7-point build vs the gear wall quadrant, revisit when tuning slice 5.
+  Default gear (dummy sim): 95.5% → 100%, DPS 165 → 185.
+- Defense build + `--barrier proactive` (vs reactive, `--enrage 900`,
+  Balanced starter): deaths 0.3% → **0.0%** at −1.5% DPS / +9 s TTK — the
+  dual-solubility lever works. At Guarded the reactive scorer already keeps
+  barrier up, so proactive adds little there.
+
 ## Environment notes
 
 - All dev in Docker: `./dev …`, `./web` → http://localhost:5174.
@@ -169,4 +149,6 @@ Known gaps / deferred items:
   banditWarlord, emberwing), `mobs/zones.ts`, `items.ts`. Level/XP/unlock
   rules in `model/progression.ts`; grind rates in `analysis/grind.ts`.
 - CLI: `--level`, `--zone <heartfield|duskwood|ashen-foothills|cinder-wastes>`
-  (grind report), `--boss <cinder-maw|bandit-warlord|emberwing>` (boss report).
+  (grind report), `--boss <cinder-maw|bandit-warlord|emberwing>` (boss report),
+  `--talents <throughput|defense|id,id,…>`, `--barrier <reactive|proactive>`.
+  Talent content in `classes/mageTalents.ts`; talent rules in `model/talent.ts`.

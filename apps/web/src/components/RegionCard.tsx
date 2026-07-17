@@ -13,6 +13,7 @@ export function RegionCard({ region }: { region: RegionMeta }) {
   const gear = useStore((s) => s.gear);
   const stance = useStore((s) => s.stance);
   const behavior = useStore((s) => s.behavior);
+  const talents = useStore((s) => s.talents);
   const here = useStore((s) => s.region);
   const unlocks = useStore((s) => s.unlocks);
   const materials = useStore((s) => s.materials);
@@ -26,7 +27,7 @@ export function RegionCard({ region }: { region: RegionMeta }) {
   const level = levelForXp(xp);
   const unlocked = regionUnlocked(region.id, unlocks);
   const band = ZONES[region.id]!().mobs[0]!.levelBand;
-  const rate = rateCache[rateKey(region.id, level, gear, stance, behavior)];
+  const rate = rateCache[rateKey(region.id, level, gear, stance, behavior, talents)];
   const isHere = here === region.id;
 
   // Bridge (Ashen gate): buildable from anywhere once enough timber is banked.

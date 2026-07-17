@@ -94,13 +94,18 @@ const hashGear = (g: GearSelection): string =>
     .join(',');
 
 const hashStance = (s: StanceConfig): string =>
-  `${s.offense}|${s.targeting}|${s.potionThresholdPct}|${s.burstCds}`;
+  `${s.offense}|${s.targeting}|${s.potionThresholdPct}|${s.burstCds}|${s.barrierPolicy ?? 'reactive'}`;
 
 const hashBehavior = (b: BehaviorOverrides): string =>
   `${b.discipline}|${b.aoeEfficiency}|${b.damageWhileMoving}`;
 
-export function buildHash(g: GearSelection, s: StanceConfig, b: BehaviorOverrides): string {
-  return `${hashGear(g)}::${hashStance(s)}::${hashBehavior(b)}`;
+export function buildHash(
+  g: GearSelection,
+  s: StanceConfig,
+  b: BehaviorOverrides,
+  talents: string[],
+): string {
+  return `${hashGear(g)}::${hashStance(s)}::${hashBehavior(b)}::${talents.join(',')}`;
 }
 
 export function rateKey(
@@ -109,6 +114,7 @@ export function rateKey(
   g: GearSelection,
   s: StanceConfig,
   b: BehaviorOverrides,
+  talents: string[],
 ): string {
-  return `${zone}|${level}|${buildHash(g, s, b)}`;
+  return `${zone}|${level}|${buildHash(g, s, b, talents)}`;
 }

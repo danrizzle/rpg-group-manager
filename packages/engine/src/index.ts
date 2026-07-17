@@ -26,8 +26,18 @@ export {
   intentsUpToLevel,
 } from './model/progression';
 export type { LevelUnlock } from './model/progression';
+export {
+  TALENT_POINT_POOL,
+  talentPointsForLevel,
+  validateTalentSelection,
+  sanitizeTalentSelection,
+  unlockedControls,
+  applyTalents,
+} from './model/talent';
+export type { TalentEffect, TalentNode, TalentTree } from './model/talent';
 export { GEAR_SETS, ITEMS, ITEMS_BY_ID, itemsForSlot } from './content/items';
 export { makeMage } from './content/classes/mage';
+export { MAGE_TALENTS, TALENT_BUILDS } from './content/classes/mageTalents';
 export { makeCinderMaw } from './content/bosses/cinderMaw';
 export { makeBanditWarlord } from './content/bosses/banditWarlord';
 export { makeEmberwing } from './content/bosses/emberwing';

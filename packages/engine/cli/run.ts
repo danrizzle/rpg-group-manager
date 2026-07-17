@@ -3,7 +3,9 @@
  *
  * Boss report (default) — N Monte Carlo runs of the Mage vs. a boss:
  *   pnpm cli -- --n 5000 --seed 42 --level 10 --gear best --boss cinder-maw \
- *               --offense 0.6 --targeting 0.5 --potion 35 --discipline 50 [--trace] [--json]
+ *               --offense 0.6 --targeting 0.5 --potion 35 --discipline 50 \
+ *               --talents throughput|defense|id,id,… --barrier reactive|proactive \
+ *               [--trace] [--json]
  *
  * Grind report — sim-derived XP/hour, risk tier and deaths/hour for a zone:
  *   pnpm cli -- --level 2 --zone heartfield --gear starter
@@ -12,6 +14,7 @@ import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
 import { makeBanditWarlord } from '../src/content/bosses/banditWarlord';
 import { makeEmberwing } from '../src/content/bosses/emberwing';
 import { makeMage } from '../src/content/classes/mage';
+import { TALENT_BUILDS } from '../src/content/classes/mageTalents';
 import { ZONES } from '../src/content/mobs/zones';
 import { GEAR_SETS } from '../src/content/items';
 import { packBandMax } from '../src/model/mobPack';
@@ -39,18 +42,24 @@ function strArg(name: string, fallback: string): string {
 const n = arg('n', 2000);
 const seed = arg('seed', 42);
 const level = arg('level', 10);
+const barrier = strArg('barrier', '');
 const stance = {
   ...DEFAULT_STANCE,
   offense: arg('offense', DEFAULT_STANCE.offense),
   targeting: arg('targeting', DEFAULT_STANCE.targeting),
   potionThresholdPct: arg('potion', DEFAULT_STANCE.potionThresholdPct),
+  ...(barrier ? { barrierPolicy: barrier as 'reactive' | 'proactive' } : {}),
 };
 const discipline = arg('discipline', 50);
 const gearName = strArg('gear', 'default');
 const gear = GEAR_SETS[gearName];
 if (!gear) throw new Error(`unknown gear set '${gearName}' (${Object.keys(GEAR_SETS).join('/')})`);
+const talentsArg = strArg('talents', '');
+const talents = talentsArg
+  ? TALENT_BUILDS[talentsArg] ?? talentsArg.split(',').map((s) => s.trim())
+  : [];
 
-const player = makeMage({ discipline }, gear, level);
+const player = makeMage({ discipline }, gear, level, talents);
 
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 const mmss = (ms: number) => {
@@ -130,7 +139,7 @@ if (flag('json')) {
 
 console.log(`\n${setup.boss.name} — level ${level}, ${n} runs, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
 console.log(
-  `  stance: offense ${stance.offense}  targeting ${stance.targeting}  potion <${stance.potionThresholdPct}%  discipline ${discipline}  gear ${gearName} (${setup.player.stats.spellPower} SP, ${setup.player.stats.maxHp} HP)`,
+  `  stance: offense ${stance.offense}  targeting ${stance.targeting}  potion <${stance.potionThresholdPct}%  barrier ${stance.barrierPolicy ?? 'reactive'}  discipline ${discipline}  gear ${gearName}  talents ${talents.length ? talents.join(',') : 'none'} (${setup.player.stats.spellPower} SP, ${setup.player.stats.maxHp} HP)`,
 );
 console.log(`\n  Kill rate:      ${pct(result.killRate)}`);
 for (const [kind, count] of sortDesc(result.lossBreakdown as Record<string, number>)) {
