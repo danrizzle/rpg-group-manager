@@ -5,8 +5,8 @@ import type { Inventory, Materials } from './types';
  * Professions v1 (GDD §6): the herbalism→alchemy loop. Herbs are world
  * materials, recipes are world content — the engine knows nothing of the
  * economy; its contract surface is exactly the consumable ids. Crafting runs
- * as a queued task (advanceWorld); a slice-6 workshop will house/upgrade it.
- * No profession skill levels in v1 (deferred).
+ * as a queued task (advanceWorld); the base workshop speeds it up but never
+ * gates it. No profession skill levels in v1 (deferred).
  */
 
 const MIN = 60_000;

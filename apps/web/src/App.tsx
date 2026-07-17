@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { BasePanel } from './components/BasePanel';
 import { CharacterPanel } from './components/CharacterPanel';
 import { FightView } from './components/FightView';
 import { ReviewPanel } from './components/ReviewPanel';
@@ -36,6 +37,9 @@ export function App() {
           <button className={`btn btn-small ${view === 'map' ? 'btn-active' : ''}`} onClick={() => setView('map')}>
             World
           </button>
+          <button className={`btn btn-small ${view === 'base' ? 'btn-active' : ''}`} onClick={() => setView('base')}>
+            Base
+          </button>
           <button className={`btn btn-small ${view === 'combat' ? 'btn-active' : ''}`} onClick={() => setView('combat')}>
             Combat
           </button>
@@ -45,6 +49,11 @@ export function App() {
         <main className="columns columns-map">
           <CharacterPanel />
           <WorldMapPanel />
+        </main>
+      ) : view === 'base' ? (
+        <main className="columns columns-map">
+          <CharacterPanel />
+          <BasePanel />
         </main>
       ) : (
         <main className="columns">

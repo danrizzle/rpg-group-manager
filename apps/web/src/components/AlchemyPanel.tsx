@@ -1,11 +1,12 @@
 import { useStore } from '../store';
+import { bankCapacity, craftTimeMult } from '../world/base';
 import { MATERIAL_LABELS, RECIPES, type Recipe } from '../world/professions';
 import type { Materials } from '../world/types';
 
 /**
- * Alchemy v1 (GDD §6): craft consumables from gathered herbs via queued
- * craft tasks. Lives on the world map for now; the slice-6 home-base
- * workshop becomes its real home (and will gate/upgrade recipes).
+ * Alchemy (GDD §6): craft consumables from gathered herbs via queued craft
+ * tasks. Lives at the home base; the workshop building speeds crafting up
+ * but never gates it (the unbuilt "field kit" crafts at normal pace).
  */
 
 const herbCostText = (r: Recipe): string =>
@@ -16,12 +17,16 @@ const herbCostText = (r: Recipe): string =>
 export function AlchemyPanel() {
   const materials = useStore((s) => s.materials);
   const inventory = useStore((s) => s.inventory);
+  const buildings = useStore((s) => s.buildings);
   const enqueueCraft = useStore((s) => s.enqueueCraft);
+  const cap = bankCapacity(buildings);
+  const mult = craftTimeMult(buildings);
 
   const canAfford = (r: Recipe, count: number): boolean =>
     Object.entries(r.herbs).every(
       ([herb, n]) => (materials[herb as keyof Materials] ?? 0) >= n * count,
     );
+  const bankFull = (r: Recipe, count: number): boolean => (inventory[r.id] ?? 0) + count > cap;
 
   return (
     <div className="panel">
@@ -43,8 +48,12 @@ export function AlchemyPanel() {
               <button
                 key={count}
                 className="btn btn-small"
-                disabled={!canAfford(r, count)}
-                title={`${herbCostText(r)} each · ${(r.unitGameMs / 60_000) * count} game-min`}
+                disabled={!canAfford(r, count) || bankFull(r, count)}
+                title={
+                  bankFull(r, count)
+                    ? 'bank full'
+                    : `${herbCostText(r)} each · ${Math.round((r.unitGameMs * mult) / 60_000) * count} game-min`
+                }
                 onClick={() => enqueueCraft(r.id, count)}
               >
                 Craft ×{count}

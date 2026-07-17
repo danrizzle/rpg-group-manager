@@ -5,9 +5,7 @@ import {
   MAGE_TALENTS,
   PLAYER_ID,
   levelForXp,
-  makeBanditWarlord,
   makeCinderMaw,
-  makeEmberwing,
   makeMage,
   runFight,
   sanitizeTalentSelection,
@@ -33,7 +31,15 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from './sim/worker';
+import { BOSS_FACTORIES } from './sim/bosses';
 import { advanceWorld } from './world/advance';
+import {
+  INITIAL_BUILDINGS,
+  bankCapacity,
+  canAffordTier,
+  craftTimeMult,
+  nextTier,
+} from './world/base';
 import { RECIPES_BY_ID, RESPEC_COST, resolveConsumables } from './world/professions';
 import {
   BRIDGE_COST,
@@ -48,6 +54,7 @@ import {
 import type {
   AwaySummary,
   BossId,
+  BuildingId,
   CraftTask,
   GatherTask,
   GrindTask,
@@ -155,11 +162,6 @@ function stripLockedControls(stance: StanceConfig, talents: string[]): StanceCon
   return stance;
 }
 
-const BOSS_FACTORIES: Record<string, () => BossDefinition> = {
-  'cinder-maw': makeCinderMaw,
-  'bandit-warlord': makeBanditWarlord,
-  emberwing: makeEmberwing,
-};
 
 const worker = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' });
 
@@ -216,6 +218,9 @@ interface Store {
 
   // --- training dummy (worker) ---
   sim: SimState;
+  /** Dummy target (transient, not persisted). */
+  simTarget: string;
+  setSimTarget: (bossId: string) => void;
   runSim: (iterations: number) => void;
 
   // --- single real fight ---
@@ -238,6 +243,9 @@ interface Store {
   unlocks: Unlocks;
   materials: Materials;
   inventory: Inventory;
+  /** Home-base building tiers (0 = unbuilt); the bank starts at tier 1. */
+  buildings: Record<BuildingId, number>;
+  upgradeBuilding: (id: BuildingId) => void;
   queue: Task[];
   lastSeenWall: number;
   multiplier: number;
@@ -390,8 +398,10 @@ export const useStore = create<Store>()(
           set((s) => ({ loadouts: s.loadouts.filter((l) => l.name !== name) })),
 
         sim: { running: false, result: null },
+        simTarget: 'cinder-maw',
+        setSimTarget: (bossId) => set({ simTarget: BOSS_FACTORIES[bossId] ? bossId : 'cinder-maw' }),
         runSim: (iterations) => {
-          const { stance, behavior, gear, sim, xp, talents, equippedConsumables } = get();
+          const { stance, behavior, gear, sim, xp, talents, equippedConsumables, simTarget } = get();
           if (sim.running) return;
           const id = nextId++;
           // The dummy simulates the equipped slots for free at nominal charges
@@ -403,6 +413,7 @@ export const useStore = create<Store>()(
             level: levelForXp(xp),
             talents,
             consumables: [...equippedConsumables],
+            bossId: simTarget,
             iterations,
             baseSeed: SIM_BASE_SEED,
           };
@@ -483,6 +494,17 @@ export const useStore = create<Store>()(
         unlocks: { ...DEFAULT_UNLOCKS },
         materials: { bridgeTimber: 0, sunleaf: 0, emberbloom: 0 },
         inventory: {},
+        buildings: { ...INITIAL_BUILDINGS },
+        upgradeBuilding: (id) =>
+          set((s) => {
+            const tier = nextTier(id, s.buildings);
+            if (!tier || !canAffordTier(tier, s.materials)) return {};
+            const materials = { ...s.materials };
+            for (const [m, n] of Object.entries(tier.cost)) {
+              materials[m as keyof Materials] -= n;
+            }
+            return { materials, buildings: { ...s.buildings, [id]: (s.buildings[id] ?? 0) + 1 } };
+          }),
         queue: [],
         lastSeenWall: Date.now(),
         multiplier: DEFAULT_MULTIPLIER,
@@ -552,26 +574,31 @@ export const useStore = create<Store>()(
             return { queue: [...next, gather] };
           }),
 
-        // Crafting runs anywhere in v1 (no travel hop); the slice-6 workshop
-        // will gate/upgrade it. Herbs for ALL units are paid at enqueue.
+        // Crafting runs anywhere; the workshop never gates, its tier only
+        // snapshots into unitGameMs at enqueue (GrindTask rate-snapshot
+        // precedent). Herbs for ALL units are paid at enqueue. The cap guard
+        // ignores other queued crafts of the same recipe — the reducer's
+        // lose-overflow rule covers that hole.
         enqueueCraft: (recipeId, count) =>
           set((s) => {
             const recipe = RECIPES_BY_ID[recipeId];
             if (!recipe || count < 1 || !Number.isInteger(count)) return {};
+            if ((s.inventory[recipeId] ?? 0) + count > bankCapacity(s.buildings)) return {};
             const materials = { ...s.materials };
             for (const [herb, per] of Object.entries(recipe.herbs)) {
               const need = per * count;
               if ((materials[herb as keyof Materials] ?? 0) < need) return {};
               materials[herb as keyof Materials] -= need;
             }
+            const unitGameMs = Math.round(recipe.unitGameMs * craftTimeMult(s.buildings));
             const craft: CraftTask = {
               id: uid(),
               kind: 'craft',
               recipeId,
               count,
-              unitGameMs: recipe.unitGameMs,
+              unitGameMs,
               producedUnits: 0,
-              durationGameMs: recipe.unitGameMs * count,
+              durationGameMs: unitGameMs * count,
               accruedGameMs: 0,
             };
             return { materials, queue: [...s.queue, craft] };
@@ -589,10 +616,16 @@ export const useStore = create<Store>()(
               const started = Math.ceil(t.accruedGameMs / t.unitGameMs);
               const refundUnits = Math.max(0, t.count - Math.max(started, t.producedUnits));
               if (recipe && refundUnits > 0) {
+                const cap = bankCapacity(s.buildings);
                 const materials = { ...s.materials };
                 for (const [herb, per] of Object.entries(recipe.herbs)) {
-                  materials[herb as keyof Materials] =
-                    (materials[herb as keyof Materials] ?? 0) + per * refundUnits;
+                  // Refunds clamp at the bank cap (never-confiscate rule);
+                  // the excess is lost — rare: needs herbs at cap AND a cancel.
+                  const cur = materials[herb as keyof Materials] ?? 0;
+                  materials[herb as keyof Materials] = Math.min(
+                    Math.max(cur, cap),
+                    cur + per * refundUnits,
+                  );
                 }
                 return { queue, materials };
               }
@@ -647,7 +680,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 4,
+      version: 5,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
@@ -661,6 +694,7 @@ export const useStore = create<Store>()(
         unlocks: s.unlocks,
         materials: s.materials,
         inventory: s.inventory,
+        buildings: s.buildings,
         attempts: s.attempts,
         queue: s.queue,
         lastSeenWall: s.lastSeenWall,
@@ -683,7 +717,11 @@ export const useStore = create<Store>()(
           // Post-fight review follow-up: per-boss attempt history joins.
           s.attempts = {};
         }
+        // (v5, slice 6: home base — `buildings` joins via the unconditional
+        // backfill below; the bank arrives pre-built at tier 1. Over-cap
+        // holdings are never confiscated, they just stop growing.)
         s.materials = { bridgeTimber: 0, sunleaf: 0, emberbloom: 0, ...(s.materials ?? {}) };
+        s.buildings = { ...INITIAL_BUILDINGS, ...(s.buildings ?? {}) };
         // Repair against current content — talent ids may have changed.
         s.talents = sanitizeTalentSelection(
           MAGE_TALENTS,
@@ -710,10 +748,12 @@ export function simIsStale(
   level: number,
   talents: string[],
   consumables: string[],
+  simTarget: string,
 ): boolean {
   if (!sim.result) return false;
   const r = sim.result.request;
   return (
+    r.bossId !== simTarget ||
     r.level !== level ||
     r.talents.join(',') !== talents.join(',') ||
     r.consumables.join(',') !== consumables.join(',') ||

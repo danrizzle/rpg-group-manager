@@ -15,6 +15,7 @@ import {
   type StanceConfig,
 } from '@rpg/engine';
 import type { ZoneId } from '../world/types';
+import { BOSS_FACTORIES } from './bosses';
 import { resolveConsumables } from '../world/professions';
 
 /**
@@ -39,6 +40,8 @@ export interface SimRequest {
   talents: string[];
   /** Equipped consumable slot ids — the dummy simulates them for free (GDD §3). */
   consumables: string[];
+  /** Dummy target (slice 6 QoL); unknown ids fall back to Cinder Maw. */
+  bossId: string;
   iterations: number;
   baseSeed: number;
 }
@@ -88,7 +91,7 @@ function runSim(req: SimRequest): SimResponse {
   const result = runMonteCarlo(
     {
       player: makeMage(req.behavior, items, req.level, req.talents, resolveConsumables(req.consumables)),
-      boss: makeCinderMaw(),
+      boss: (BOSS_FACTORIES[req.bossId] ?? makeCinderMaw)(),
       stance: req.stance,
     },
     req.iterations,

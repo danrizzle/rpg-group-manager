@@ -16,11 +16,16 @@ function line(e: AwayEvent): string {
     case 'gather':
       return `Gathered ${Math.round(e.materialGained ?? 0)} ${
         e.material ? MATERIAL_LABELS[e.material] : 'materials'
-      } in ${regionName(e.zone)}`;
+      } in ${regionName(e.zone)}${lostNote(e.lostToCapacity)}`;
     case 'craft':
-      return `Crafted ${e.craftedCount ?? 0}× ${RECIPES_BY_ID[e.recipeId ?? '']?.name ?? e.recipeId}`;
+      return `Crafted ${e.craftedCount ?? 0}× ${
+        RECIPES_BY_ID[e.recipeId ?? '']?.name ?? e.recipeId
+      }${lostNote(e.lostToCapacity)}`;
   }
 }
+
+const lostNote = (lost?: number): string =>
+  lost !== undefined ? ` (bank full — ${Math.round(lost)} lost)` : '';
 
 export function AwaySummaryModal() {
   const summary = useStore((s) => s.awaySummary);

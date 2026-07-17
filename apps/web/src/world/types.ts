@@ -4,7 +4,10 @@
  * the store. The engine stays time-agnostic.
  */
 
-export type View = 'combat' | 'map';
+export type View = 'combat' | 'map' | 'base';
+
+/** Home-base buildings (slice 6). Declared here so base.ts → types.ts stays one-directional. */
+export type BuildingId = 'workshop' | 'bank';
 
 /** The four v1 regions — 1:1 with the engine's ZONES keys. */
 export type RegionId = 'heartfield' | 'duskwood' | 'ashen-foothills' | 'cinder-wastes';
@@ -61,6 +64,8 @@ export interface GatherTask extends BaseTask {
   zone: ZoneId;
   material: keyof Materials;
   ratePerHour: number;
+  /** Actually banked so far (accrual clamps at bank capacity); absent on pre-v5 tasks. */
+  gained?: number;
 }
 
 export interface CraftTask extends BaseTask {
@@ -72,6 +77,8 @@ export interface CraftTask extends BaseTask {
   unitGameMs: number;
   /** Whole units already deposited into the inventory. */
   producedUnits: number;
+  /** Units lost to a full bank (deposits clamp; the craft never stalls); absent pre-v5. */
+  lostUnits?: number;
 }
 
 export type Task = TravelTask | GrindTask | GatherTask | CraftTask;
@@ -87,6 +94,8 @@ export interface AwayEvent {
   materialGained?: number;
   recipeId?: string;
   craftedCount?: number;
+  /** Units/material lost because the bank was full (slice 6 caps). */
+  lostToCapacity?: number;
   /** Statistical, display-only — never simulated per death. */
   estimatedDeaths?: number;
 }
@@ -102,5 +111,7 @@ export interface WorldSlice {
   region: RegionId;
   materials: Materials;
   inventory: Inventory;
+  /** Building id → current tier (0 = unbuilt). Read-only to the reducer (bank capacity). */
+  buildings: Record<BuildingId, number>;
   queue: Task[];
 }

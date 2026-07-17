@@ -2,7 +2,6 @@ import { levelForXp } from '@rpg/engine';
 import { useEffect } from 'react';
 import { useStore } from '../store';
 import { MULTIPLIER_PRESETS, REGIONS, buildHash } from '../world/tasks';
-import { AlchemyPanel } from './AlchemyPanel';
 import { QueueStrip } from './QueueStrip';
 import { RegionCard } from './RegionCard';
 
@@ -55,7 +54,7 @@ export function WorldMapPanel() {
         ))}
       </div>
 
-      <AlchemyPanel />
+      <p className="muted">Alchemy has moved to your Home Base.</p>
     </section>
   );
 }

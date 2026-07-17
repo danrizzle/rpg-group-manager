@@ -2,8 +2,8 @@
 
 > Update this file whenever a slice lands. Roadmap definition: DESIGN.md §10.
 
-**Current phase: 3 (Progression), slices 1–5 of 6 done; world & leveling
-design done (GDD v0.4) — next up: slice 6 (home base v1).**
+**Phase 3 (Progression) COMPLETE — all 6 slices done. Next up: phase 4
+(group content: dungeon, trinity, boss journal, boss plans, live calls).**
 As of July 2026.
 
 ## Phase checklist
@@ -105,7 +105,37 @@ As of July 2026.
         charges; grind sims run with empty slots (no free potions while
         AFK); persist v3 migration + consumables in `rateKey`-adjacent
         staleness (`simIsStale`). Tuning: see "Balance state (consumables)".
-  - [ ] Slice 6 — Home base v1 (bank, workshops, training arena)
+  - [x] **Slice 6 — Home base v1 (bank + alchemy workshop).** GDD §5, bounded
+        by §1 (tinkering stays instant/free) and §8 Law 1 (full base belongs
+        to the 2-char stage) — so v1 is minimal and strictly additive.
+        **Base = third top-level view** (World · Base · Combat; a 5th region
+        was rejected — RegionId is a closed union coupled to engine ZONES).
+        Declarative buildings in `world/base.ts` (`BuildingDefinition` with
+        upgrade tiers; effects as data: `craftTimeMult`, `capacityPerKind`).
+        **Workshop** (upgrade-only, never gates): unbuilt = "field kit" at
+        1× speed; T1 (15 timber) −25% / T2 (30 timber + 10 emberbloom) −50%
+        craft time, snapshotted into `unitGameMs` at enqueue (GrindTask
+        rate-snapshot precedent; pre-v5 queued crafts keep their 1× snapshot).
+        **Bank pre-built at T1** — the future roster's shared potion pool;
+        per-item-kind caps over materials AND consumables bind from day one
+        (T1 50, T2 150 via 25 timber + 10 sunleaf). Cap semantics: **caps
+        never confiscate, crafts never stall** — gather accrual clamps via
+        `min(max(cur, cap), cur + gain)` (over-cap hoards preserved, frozen);
+        craft deposits clamp, overflow is lost and reported
+        (`AwayEvent.lostToCapacity`, "bank full — N lost"); enqueue guard
+        blocks crafts that can't fit (ignoring other queued crafts —
+        documented hole covered by lose-overflow). `upgradeBuilding` action;
+        BasePanel (buildings grid + bank storage + relocated AlchemyPanel);
+        persist v5. **Training arena deferred** (eventual role: combat-stat
+        training) — in its place, ungated QoL: **dummy-sim boss selection**
+        (`SimRequest.bossId`, shared `sim/bosses.ts` registry, target
+        segmented control in ReviewPanel, Emberwing gated by the bridge like
+        the map's Challenge button; the hero line now names its target).
+        Engine untouched (79 tests green). Verified in-browser: v4→v5
+        migration, exact-50 gather clamp + away note, overflow craft
+        completes with loss, workshop snapshot 600000→450000 ms, bank T2
+        caps /150, boss-select stales + relabels the sim.
+        Building costs deliberately revive the post-bridge timber loop.
 - [ ] **Phase 4 — Group content**: 3–5-char dungeon, trinity (Warrior/Priest
       kits), boss journal + discovery, boss plan timeline, group CDs, first
       live calls + tactical pause + call→plan adoption, familiarity, hold DPS,

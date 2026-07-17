@@ -1,5 +1,6 @@
 import { levelForXp } from '@rpg/engine';
 import { simIsStale, useStore } from '../store';
+import { SIM_TARGETS } from '../sim/bosses';
 import { mmss } from '../fight/replay';
 import { Histogram } from './Histogram';
 
@@ -25,13 +26,38 @@ export function ReviewPanel() {
   const xp = useStore((s) => s.xp);
   const talents = useStore((s) => s.talents);
   const equippedConsumables = useStore((s) => s.equippedConsumables);
-  const stale = simIsStale(sim, stance, behavior, gear, levelForXp(xp), talents, equippedConsumables);
+  const simTarget = useStore((s) => s.simTarget);
+  const setSimTarget = useStore((s) => s.setSimTarget);
+  const unlocks = useStore((s) => s.unlocks);
+  const stale = simIsStale(
+    sim, stance, behavior, gear, levelForXp(xp), talents, equippedConsumables, simTarget,
+  );
   const r = sim.result;
 
   return (
     <section className="panel">
       <h2>Training Dummy</h2>
       <p className="muted">Free, instant, unlimited — distributions instead of single rolls.</p>
+      <div className="control">
+        <div className="control-label">Simulate against</div>
+        <div className="segmented">
+          {SIM_TARGETS.map((t) => {
+            // Same reachability as the world map's Challenge buttons.
+            const locked = t.id === 'emberwing' && !unlocks.bridgeBuilt;
+            return (
+              <button
+                key={t.id}
+                className={`btn btn-small ${simTarget === t.id ? 'btn-active' : ''}`}
+                disabled={locked}
+                title={locked ? 'Build the Bridge first' : `Simulate vs ${t.name}`}
+                onClick={() => setSimTarget(t.id)}
+              >
+                {t.name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <div className="sim-actions">
         {[1000, 5000].map((n) => (
           <button key={n} className="btn btn-primary" disabled={sim.running} onClick={() => runSim(n)}>
@@ -47,6 +73,7 @@ export function ReviewPanel() {
           <div className="hero">
             <div className="hero-number">{(r.killRate * 100).toFixed(1)}%</div>
             <div className="hero-label">
+              vs {SIM_TARGETS.find((t) => t.id === r.request.bossId)?.name ?? r.request.bossId} —
               damage check passed in {Math.round(r.killRate * r.iterations).toLocaleString()} of{' '}
               {r.iterations.toLocaleString()} runs
             </div>
