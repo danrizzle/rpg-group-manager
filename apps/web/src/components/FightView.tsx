@@ -1,6 +1,7 @@
+import { CONSUMABLES_BY_ID, type PotionNote } from '@rpg/engine';
 import { useEffect, useMemo, useRef } from 'react';
 import { buildLog, mmss, Replay, type ActorView } from '../fight/replay';
-import { useStore } from '../store';
+import { useStore, type AttemptSummary, type FightState } from '../store';
 import type { BossId } from '../world/types';
 
 const BUFF_NAMES: Record<string, string> = {
@@ -11,6 +12,66 @@ const BUFF_NAMES: Record<string, string> = {
   'flask-of-embers': 'Flask of Embers',
   'fire-ward-potion': 'Fire Ward',
 };
+
+const POTION_NOTES: Record<PotionNote, string> = {
+  'no-potion-equipped': 'no healing potion equipped',
+  'potion-disabled': 'potion threshold set to never',
+  'out-of-charges': 'potion charges spent',
+  'on-cooldown': 'potion on cooldown',
+  'too-fast': 'potion ready, but death outran the reaction',
+};
+
+const cause = (id: string): string => id.replace(/-/g, ' ');
+
+/** Signed m:ss delta vs a reference kill time. */
+const delta = (ms: number, ref: number): string => {
+  const d = ms - ref;
+  return `${d <= 0 ? '−' : '+'}${mmss(Math.abs(d))}`;
+};
+
+const vsText = (label: string, ref: AttemptSummary | undefined, durationMs: number): string | null => {
+  if (!ref) return null;
+  if (ref.result !== 'kill') return `${label}: wipe (${cause(ref.result)})`;
+  return `${label}: ${mmss(ref.durationMs)} (${delta(durationMs, ref.durationMs)})`;
+};
+
+/** GDD §3 post-fight review: outcome, comparison, consumables, wipe line. */
+function PostFightReview({ fight }: { fight: FightState }) {
+  const { review, compare, result } = fight;
+  const kill = result.result === 'kill';
+  const newBest =
+    kill && (compare.best === undefined || result.durationMs < compare.best.durationMs);
+
+  const used = Object.entries(review.consumablesUsed).map(([id, n]) =>
+    `${n > 1 ? `${n}× ` : ''}${CONSUMABLES_BY_ID[id]?.name ?? id}`,
+  );
+  const wipeLine = review.wipe
+    ? review.wipe.killedBy !== undefined
+      ? `${mmss(review.wipe.atMs)}: ${cause(review.wipe.killedBy)} killed Elara — ${
+          review.wipe.potionNote ? POTION_NOTES[review.wipe.potionNote] : ''
+        }`
+      : `${cause(review.wipe.kind)} at ${mmss(review.wipe.atMs)} with the boss at ${review.wipe.bossHpPctLeft?.toFixed(0) ?? '?'}%`
+    : null;
+
+  return (
+    <div className="review-block">
+      <div className="statline">
+        {Math.round(review.summary.dps)} DPS · {mmss(result.durationMs)}
+        {newBest && <span className="chip chip-warn"> new best</span>}
+        {kill && !newBest && vsText('best', compare.best, result.durationMs) && (
+          <span className="muted"> · {vsText('best', compare.best, result.durationMs)}</span>
+        )}
+        {kill && vsText('last', compare.last, result.durationMs) && (
+          <span className="muted"> · {vsText('last', compare.last, result.durationMs)}</span>
+        )}
+      </div>
+      {wipeLine && <div className="statline log-loss">{wipeLine}</div>}
+      <div className="statline muted">
+        Used: {used.length ? used.join(', ') : 'no consumables'}
+      </div>
+    </div>
+  );
+}
 
 function HpBar({ actor, big }: { actor: ActorView; big?: boolean }) {
   const pct = (actor.hp / actor.maxHp) * 100;
@@ -149,9 +210,12 @@ export function FightView() {
       )}
 
       {view.ended && (
-        <div className={`banner ${view.ended === 'kill' ? 'banner-win' : 'banner-loss'}`}>
-          {view.ended === 'kill' ? `VICTORY — ${mmss(fight.result.durationMs)}` : `WIPE — ${view.ended}`}
-        </div>
+        <>
+          <div className={`banner ${view.ended === 'kill' ? 'banner-win' : 'banner-loss'}`}>
+            {view.ended === 'kill' ? `VICTORY — ${mmss(fight.result.durationMs)}` : `WIPE — ${view.ended}`}
+          </div>
+          <PostFightReview fight={fight} />
+        </>
       )}
 
       <div className="playback">

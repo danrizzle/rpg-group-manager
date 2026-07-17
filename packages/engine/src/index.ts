@@ -56,8 +56,8 @@ export {
   makeAshenFoothillsPack,
   makeCinderWastesPack,
 } from './content/mobs/zones';
-export { summarizeRun, formatEvents } from './analysis/metrics';
-export type { RunSummary } from './analysis/metrics';
+export { summarizeRun, fightReview, formatEvents } from './analysis/metrics';
+export type { FightReview, PotionNote, RunSummary, WipeAnalysis } from './analysis/metrics';
 export { runMonteCarlo } from './analysis/montecarlo';
 export type { MonteCarloResult } from './analysis/montecarlo';
 export { grindRates, riskTier, devalue, DEFAULT_PULL_CYCLE } from './analysis/grind';

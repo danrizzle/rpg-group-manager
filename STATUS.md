@@ -167,9 +167,16 @@ Known gaps / deferred items:
 
 - Knowledge levers are thin until phase 4 (boss plans, familiarity) — the
   knowledge quadrant now rides on discipline + potion timing + preparation.
-- Post-fight review lacks comparison to last/best attempt and a wipe-analysis
-  line (GDD §3) — small, high-value, event-stream-only addition. A
-  "consumables used" line in the review snapshot belongs there too.
+- ~~Post-fight review lacks comparison to last/best attempt and a
+  wipe-analysis line~~ — landed as a standalone follow-up after slice 5:
+  pure `fightReview` in `analysis/metrics.ts` (stream-only: consumables
+  used, structured wipe facts — killedBy + a potion note explaining why the
+  potion didn't save you, or boss-HP-left on enrage/timeout; 6 tests, 79
+  total); web persists per-boss last/best attempts (persist v4) and
+  FightView shows the review block once playback reaches the end (DPS, TTK
+  vs last/best, "new best", wipe line, consumables used). Remaining GDD §3
+  review items: "combat log light" decisive-moment highlighting beyond the
+  wipe line, and buff-uptime/overheal stats — revisit with phase 4.
 - ~~Deaths at full defaults are rare (~0.5%)~~ — fixed in slice 5: 5.9%
   deaths at defaults with empty slots; consumables are the survival lever.
 - Slice-5 v1 simplifications: grind sims are consumable-free; 1 potion in

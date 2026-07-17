@@ -13,9 +13,11 @@ import {
   sanitizeTalentSelection,
   talentPointsForLevel,
   unlockedControls,
+  fightReview,
   type BossDefinition,
   type CharacterDef,
   type FightResult,
+  type FightReview,
   type GearSlot,
   type GrindRates,
   type Item,
@@ -166,12 +168,29 @@ export interface SimState {
   result: (SimResponse & { request: SimRequest }) | null;
 }
 
+/** What one attempt leaves behind for later comparison (GDD §3 review #4). */
+export interface AttemptSummary {
+  result: FightResult['result'];
+  durationMs: number;
+  dps: number;
+  at: number; // wall-clock ms
+}
+
+export interface AttemptRecord {
+  last?: AttemptSummary;
+  /** Fastest kill so far. */
+  best?: AttemptSummary;
+}
+
 export interface FightState {
   result: FightResult;
   seed: number;
   player: CharacterDef;
   boss: BossDefinition;
   bossId: string;
+  review: FightReview;
+  /** The boss's attempt record BEFORE this pull — what "vs last/best" compares against. */
+  compare: AttemptRecord;
 }
 
 interface Store {
@@ -201,6 +220,8 @@ interface Store {
 
   // --- single real fight ---
   fight: FightState | null;
+  /** Per-boss last/best attempt summaries (persisted). */
+  attempts: Record<string, AttemptRecord>;
   pull: (bossId?: string) => void;
 
   // --- replay playback clock ---
@@ -391,8 +412,9 @@ export const useStore = create<Store>()(
         },
 
         fight: null,
+        attempts: {},
         pull: (bossId = 'cinder-maw') => {
-          const { stance, behavior, gear, xp, talents, equippedConsumables, inventory } = get();
+          const { stance, behavior, gear, xp, talents, equippedConsumables, inventory, attempts } = get();
           const seed = Math.floor(Math.random() * 2 ** 31);
           // Slots the current stock can actually cover; short slots are
           // skipped for this fight (never blocks the pull).
@@ -400,6 +422,25 @@ export const useStore = create<Store>()(
           const player = makeMage(behavior, resolveGear(gear), levelForXp(xp), talents, defs);
           const boss = (BOSS_FACTORIES[bossId] ?? makeCinderMaw)();
           const result = runFight({ player, boss, stance, seed });
+          const review = fightReview(result, { player, boss, stance });
+          // Comparison targets are the attempts BEFORE this pull; then the
+          // record advances (best = fastest kill).
+          const compare: AttemptRecord = attempts[bossId] ?? {};
+          const attempt: AttemptSummary = {
+            result: result.result,
+            durationMs: result.durationMs,
+            dps: review.summary.dps,
+            at: Date.now(),
+          };
+          const best =
+            attempt.result === 'kill' &&
+            (compare.best === undefined || attempt.durationMs < compare.best.durationMs)
+              ? attempt
+              : compare.best;
+          const nextAttempts = {
+            ...attempts,
+            [bossId]: { last: attempt, ...(best !== undefined ? { best } : {}) },
+          };
           // Real fights consume what they brought (GDD §3), win or lose:
           // passives 1 per distinct granted id; potion charges from the event
           // stream (the stream is the source of truth), capped by stock.
@@ -419,7 +460,8 @@ export const useStore = create<Store>()(
             if (n > 0) nextInventory[id] = Math.max(0, (nextInventory[id] ?? 0) - n);
           }
           set({
-            fight: { result, seed, player, boss, bossId },
+            fight: { result, seed, player, boss, bossId, review, compare },
+            attempts: nextAttempts,
             inventory: nextInventory,
             playT: 0,
             playing: true,
@@ -605,7 +647,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
@@ -619,6 +661,7 @@ export const useStore = create<Store>()(
         unlocks: s.unlocks,
         materials: s.materials,
         inventory: s.inventory,
+        attempts: s.attempts,
         queue: s.queue,
         lastSeenWall: s.lastSeenWall,
         multiplier: s.multiplier,
@@ -635,6 +678,10 @@ export const useStore = create<Store>()(
           s.inventory = {};
           s.equippedConsumables = [];
           s.loadouts = (s.loadouts ?? []).map((l) => ({ ...l, consumables: [] }));
+        }
+        if (version < 4) {
+          // Post-fight review follow-up: per-boss attempt history joins.
+          s.attempts = {};
         }
         s.materials = { bridgeTimber: 0, sunleaf: 0, emberbloom: 0, ...(s.materials ?? {}) };
         // Repair against current content — talent ids may have changed.
