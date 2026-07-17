@@ -43,8 +43,67 @@ As of July 2026.
         (progression/unlocks/queue/lastSeen only). CharacterPanel: level/XP bar
         + unlock-arc gating of intents/abilities. Engine unchanged — the web
         now threads `level` into `makeMage`.
-  - [ ] Slice 4 — Talents (numbers + new behavior controls + behavior
-        stats; loadouts)
+  - [ ] **Slice 4 — Talents + loadouts (engine + web).** Implement DESIGN.md
+        §2 "Talents & Skill Trees" + "Loadouts". Talents arrive at the cap
+        (level 10) and deepen the intents leveling taught; they deliver three
+        things (§2): **numbers** (spell power, crit, haste, HP, armor),
+        **behavior stats** (discipline, aoeEfficiency, damageWhileMoving), and
+        **new behavior controls** (new *discrete named* intent options, §3 —
+        never sliders). Respec allowed; loadouts save a full build for reuse.
+
+        **Engine first** (`packages/engine`, pure/deterministic — the usual
+        rules):
+        - New `model/talent.ts`: declarative `TalentNode { id, name, tier,
+          cost, requires?: string[], effects: TalentEffect[] }` where
+          `TalentEffect` is a union — `{kind:'stat', stat, add}` (CombatStats
+          number), `{kind:'behavior', stat, add}` (BehaviorStats),
+          `{kind:'ability', abilityId}` (grant/modify kit), `{kind:'control',
+          control}` (unlock a new intent option). Content in
+          `content/classes/mageTalents.ts`: a small v1 Mage tree (~3 tiers,
+          representative — tune numbers via the CLI/sim, not by hand). Placeholder
+          talent-point pool granted at cap (e.g. a flat pool; note it's tunable).
+        - Pure `applyTalents(stats, behavior, kit, controls, nodeIds)` folding
+          talent effects on top of gear (mirror `applyGear` in `model/item.ts`),
+          returning augmented stats/behavior/kit + the set of unlocked controls.
+          Thread a `talents: string[] = []` param through `makeMage` (4th arg,
+          backward-compatible like `level` was) → `nakedBaseForLevel` → gear →
+          talents. Export `applyTalents`, the tree, and a talent-points helper.
+        - **Implement ONE new behavior control end-to-end** as the proof the
+          framework is real (like slices 2–3 shipped a mechanism + one instance).
+          Do NOT use `burstCds:'save-for-plan-window'` — it needs the phase-4
+          plan window and would just hold burst forever. Instead add a
+          sim-effective control, e.g. `barrierPolicy: 'reactive' | 'proactive'`
+          on `StanceConfig` (optional, default reactive; unlocked by a talent):
+          proactive keeps Ice Barrier on ~full uptime (survival ↑, a GCD of DPS ↓)
+          — a real dual-solubility lever (§2 law 3). Wire it in
+          `sim/decision.ts`/`sim/engine.ts` and CLI flags.
+        - Tests (`packages/engine/test/`): applyTalents folds deltas correctly;
+          a throughput build raises DPS and a defensive/`proactive` build raises
+          survival vs. no talents; determinism holds. Keep the 44 existing green
+          (default `makeMage()` = no talents = unchanged).
+
+        **Then web** (`apps/web`):
+        - Thread `talents` into every `makeMage` call site (store `pull`,
+          CharacterPanel `useMemo`, `sim/worker.ts` `SimRequest` + grind
+          `GrindRequest`; extend `simIsStale`/`rateKey`) exactly as `level` was
+          in slice 3.
+        - Talent tree UI (a CharacterPanel section or new panel): nodes by tier,
+          points remaining, spend/refund, **Respec** (v1 free — real resource
+          cost lands with slice 5's economy; leave the hook). Data-driven `.map`
+          over the tree like the existing `STANCES` controls; reuse `.chip`/`.btn`.
+          Talent-unlocked controls surface new intent options in the intent panel
+          (e.g. a Barrier-policy dropdown appears once its talent is taken),
+          gated the same way slice 3 gates by unlock arc.
+        - **Loadouts** (§2): store `loadouts: {name, stance, talents, gear}[]`
+          + `saveLoadout/applyLoadout/deleteLoadout`, persisted via the existing
+          `persist` partialize. UI to save the current build, apply, and delete.
+          (Consumable slots are part of a loadout in the GDD but deferred to
+          slice 5 when consumables exist — note it.)
+        - Verify: engine tests + web typecheck/build; in-browser (chrome-devtools
+          MCP) — at cap, spend talents and see stats change + the new control
+          appear + a build raise the training-dummy kill%; save a loadout, tweak
+          the build, re-apply it, reload and confirm it persisted.
+        - Commit engine and web as one slice (repo convention); update this file.
   - [ ] Slice 5 — Professions v1 (herbalism→alchemy loop feeding consumables)
   - [ ] Slice 6 — Home base v1 (bank, workshops, training arena)
 - [ ] **Phase 4 — Group content**: 3–5-char dungeon, trinity (Warrior/Priest
