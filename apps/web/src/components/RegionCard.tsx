@@ -33,11 +33,11 @@ export function RegionCard({ region }: { region: RegionMeta }) {
   const timber = materials.bridgeTimber;
   const canBuildBridge = region.id === 'ashen-foothills' && !unlocks.bridgeBuilt && timber >= BRIDGE_COST.bridgeTimber;
 
-  // A zone boss can be challenged once its home region is reachable:
+  // A gate boss can be challenged once its home region is reachable, and stays
+  // repeatable after the first kill (re-fight for practice/loot):
   // Bandit Warlord lives in Heartfield (always); Emberwing in Ashen (needs the bridge).
   const canChallenge =
     !!region.boss &&
-    !unlocked &&
     (region.boss.id === 'bandit-warlord' ? true : unlocks.bridgeBuilt);
 
   return (
