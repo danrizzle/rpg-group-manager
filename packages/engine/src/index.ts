@@ -54,6 +54,19 @@ export { GEAR_SETS, ITEMS, ITEMS_BY_ID, itemsForSlot } from './content/items';
 export { CONSUMABLES, CONSUMABLES_BY_ID, CONSUMABLE_SLOTS } from './content/consumables';
 export { makeMage } from './content/classes/mage';
 export { MAGE_TALENTS, TALENT_BUILDS } from './content/classes/mageTalents';
+export { makeWarrior, warriorBaseForLevel } from './content/classes/warrior';
+export { makePriest, priestBaseForLevel } from './content/classes/priest';
+export { applyComp, unlockedGroupCds } from './model/comp';
+export type { CompPassiveDefinition, GroupCdDefinition } from './model/comp';
+export { GROUP_CDS, COMP_PASSIVES } from './content/groupCds';
+export { encounterById } from './model/dungeon';
+export type { DungeonDefinition, DungeonEncounter } from './model/dungeon';
+export {
+  makeEmberForge,
+  makeForgeWhelps,
+  makeSlagmaw,
+  makeVulkan,
+} from './content/dungeons/emberForge';
 export { makeCinderMaw } from './content/bosses/cinderMaw';
 export { makeBanditWarlord } from './content/bosses/banditWarlord';
 export { makeEmberwing } from './content/bosses/emberwing';

@@ -19,6 +19,12 @@ import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
 import { makeBanditWarlord } from '../src/content/bosses/banditWarlord';
 import { makeEmberwing } from '../src/content/bosses/emberwing';
 import { makeMage } from '../src/content/classes/mage';
+import { makeWarrior } from '../src/content/classes/warrior';
+import { makePriest } from '../src/content/classes/priest';
+import { applyComp } from '../src/model/comp';
+import { COMP_PASSIVES, GROUP_CDS } from '../src/content/groupCds';
+import { makeEmberForge } from '../src/content/dungeons/emberForge';
+import { encounterById } from '../src/model/dungeon';
 import { TALENT_BUILDS } from '../src/content/classes/mageTalents';
 import { ZONES } from '../src/content/mobs/zones';
 import { GEAR_SETS } from '../src/content/items';
@@ -124,6 +130,122 @@ if (zoneName) {
   console.log(
     `  Pull:           ${mmss(rates.avgPullMs)} avg  (${rates.avgXpPerPull.toFixed(1)} XP, ${pct(rates.deathRatePerPull)} died)`,
   );
+  console.log();
+  process.exit(0);
+}
+
+// ---- Dungeon encounter report (--encounter, party of 3) --------------------
+
+const encounterName = strArg('encounter', '');
+if (encounterName) {
+  const dungeon = makeEmberForge();
+  const enc = encounterById(dungeon, encounterName);
+  if (!enc) {
+    throw new Error(
+      `unknown encounter '${encounterName}' (${dungeon.encounters.map((e) => e.id).join('/')})`,
+    );
+  }
+  // Party tuning knobs: --pgear <naked|starter|default|resist|best> (mage has
+  // no 'resist'-less gap: unprefixed sets), --pdisc <n>, --pcons <id,…|none>.
+  const tier = strArg('pgear', 'default');
+  const gearFor = (cls: string) => {
+    const key = cls === 'mage' ? tier : `${cls}-${tier}`;
+    const g = GEAR_SETS[key];
+    if (!g) throw new Error(`no gear set '${key}'`);
+    return g;
+  };
+  const pdisc = arg('pdisc', 50);
+  const pconsArg = strArg('pcons', '');
+  const pcons =
+    pconsArg === '' || pconsArg === 'none'
+      ? []
+      : pconsArg.split(',').map((s) => {
+          const c = CONSUMABLES_BY_ID[s.trim()];
+          if (!c) throw new Error(`unknown consumable '${s.trim()}'`);
+          return c;
+        });
+  const defs = applyComp(
+    [
+      makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, pcons),
+      makePriest({ discipline: pdisc }, gearFor('priest'), 10, pcons),
+      makeMage({ discipline: pdisc }, gearFor('mage'), 10, talents, pcons),
+    ],
+    GROUP_CDS,
+    COMP_PASSIVES,
+  );
+  const party = defs.map((character) => ({ character, stance: { ...stance } }));
+  const boss =
+    enc.kind === 'boss'
+      ? {
+          ...enc.boss,
+          ...(arg('hp', 0) > 0 ? { hp: arg('hp', 0) } : {}),
+          ...(arg('enrage', 0) > 0 ? { enrageAtMs: arg('enrage', 0) * 1000 } : {}),
+        }
+      : undefined;
+  const psetup = enc.kind === 'boss' ? { party, boss: boss! } : { party, pack: enc.pack };
+
+  const started = performance.now();
+  const result = runMonteCarlo(psetup, n, seed);
+  const elapsed = performance.now() - started;
+
+  // Per-character averages across runs (from the stream-derived summaries).
+  const charAgg = new Map<string, { name: string; dps: number; hps: number; taken: number; deaths: number }>();
+  for (const r of result.runs) {
+    for (const [id, c] of Object.entries(r.perCharacter ?? {})) {
+      const agg = charAgg.get(id) ?? { name: c.name, dps: 0, hps: 0, taken: 0, deaths: 0 };
+      agg.dps += c.dps;
+      agg.hps += c.hps;
+      agg.taken += c.damageTaken;
+      agg.deaths += c.died ? 1 : 0;
+      charAgg.set(id, agg);
+    }
+  }
+
+  if (flag('json')) {
+    const { runs, ...aggregate } = result;
+    const perCharacter = Object.fromEntries(
+      [...charAgg.entries()].map(([id, a]) => [
+        id,
+        { name: a.name, dps: a.dps / n, hps: a.hps / n, damageTaken: a.taken / n, deathRate: a.deaths / n },
+      ]),
+    );
+    console.log(JSON.stringify({ encounter: enc.id, ...aggregate, perCharacter }, null, 2));
+    process.exit(0);
+  }
+
+  console.log(`\n${enc.name} (${dungeon.name}) — trinity, ${n} runs, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
+  console.log(
+    `  party gear ${tier}  discipline ${pdisc}  consumables ${pcons.length ? pcons.map((c) => c.id).join(',') : 'none'}  stance: offense ${stance.offense} targeting ${stance.targeting} potion <${stance.potionThresholdPct}%`,
+  );
+  console.log(`\n  Kill rate:      ${pct(result.killRate)}`);
+  for (const [kind, count] of sortDesc(result.lossBreakdown as Record<string, number>)) {
+    console.log(`    lost to ${kind}: ${pct(count / n)}`);
+  }
+  if (result.timeToKillMs.mean > 0) {
+    const t = result.timeToKillMs;
+    console.log(
+      `  Time to kill:   ${mmss(t.mean)} ± ${mmss(t.stddev)}   (p10 ${mmss(t.p10)}, p90 ${mmss(t.p90)})`,
+    );
+  }
+  console.log(`  Party DPS:      ${result.dps.mean.toFixed(0)} ± ${result.dps.stddev.toFixed(0)}`);
+  console.log(`  Mistakes/run:   ${result.avgMistakesPerRun.toFixed(1)}`);
+  console.log(`\n  Per character (avg/run):`);
+  for (const [id, a] of charAgg) {
+    console.log(
+      `    ${a.name.padEnd(12)} (${id.padEnd(7)})  dps ${(a.dps / n).toFixed(0).padStart(4)}  hps ${(a.hps / n).toFixed(0).padStart(4)}  taken ${(a.taken / n).toFixed(0).padStart(6)}  died ${pct(a.deaths / n)}`,
+    );
+  }
+  if (Object.keys(result.deathCauses).length > 0) {
+    console.log(`  Death causes:`);
+    for (const [cause, count] of sortDesc(result.deathCauses).slice(0, 4)) {
+      console.log(`    ${cause}: ${count}`);
+    }
+  }
+  if (flag('trace')) {
+    const one = runFight({ ...psetup, seed });
+    console.log(`\n  Trace of run seed=${seed} (${one.result}, ${mmss(one.durationMs)}), last 30 events:`);
+    for (const line of formatEvents(one.events).slice(-30)) console.log(`    ${line}`);
+  }
   console.log();
   process.exit(0);
 }

@@ -28,7 +28,7 @@ export interface MobDefinition {
 export interface MobPackDefinition {
   id: string;
   name: string;
-  /** 1–3 mobs, all present from t=0. */
+  /** All present from t=0 (zone packs 1–3; dungeon trash up to ~5). */
   mobs: MobDefinition[];
   /**
    * ± fraction applied to melee swing pacing (mirrors

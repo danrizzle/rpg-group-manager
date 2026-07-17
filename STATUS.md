@@ -164,7 +164,7 @@ As of July 2026.
         type for the legacy-required fields. Solo keeps the main RNG
         stream; party members run on per-character forks. Web untouched
         and building.
-  - [ ] **Slice 2 — Trinity kits + Ember Forge (engine).** `makeWarrior`
+  - [x] **Slice 2 — Trinity kits + Ember Forge (engine).** `makeWarrior`
         (tank: high armor/HP, attackPower kit, high-threat single + AoE
         strikes, Shield Wall defensive) + `makePriest` (healer: healingPower
         kit, single heal `lowest-ally`, group heal, Divine Hymn heal-CD) +
@@ -182,6 +182,16 @@ As of July 2026.
         the wrong moment overlaps them). CLI `--encounter <id> --party`.
         Tuning pass per the §2 laws (Normal ≥ ~90% at party defaults with
         adequate gear, no plan; measure at `--enrage 900` near walls).
+        **Landed:** class-tagged items (`Item.classes`, `itemsForSlot(slot,
+        classId?)`; class-prefixed gear sets incl. `-resist` variants),
+        `model/comp.ts` (`applyComp`/`unlockedGroupCds`) + Battle Shout &
+        Well-Drilled Team content, `model/dungeon.ts` + Ember Forge, CLI
+        `--encounter <forge-whelps|slagmaw|vulkan> --pgear <tier> --pdisc
+        --pcons`, party death events carry `killedBySource` (party-only
+        meta — solo streams untouched). Divine Hymn rides a `heal-cd` tag:
+        the auto policy holds it for ≥35% average party deficit, plans/
+        calls will fire it deliberately. 15 new tests (107 green); all 7
+        solo CLI baselines still byte-identical. Balance below.
   - [ ] **Slice 3 — Roster + dungeon (web).** Recruits: first Cinder Maw
         kill unlocks Borin (warrior) + Seren (priest) — backfilled for
         saves that already killed it. Per-character builds: Elara keeps her
@@ -238,6 +248,30 @@ As of July 2026.
 - [ ] **Phase 7 — Expansion stages** (as needed): traits, council/split/soak,
       difficulty tiers, affixes, timed runs, behavior-effect uniques,
       graphical replay
+
+## Balance state (Ember Forge, phase-4 slice 2)
+
+Trinity = Warrior + Priest + Mage via `applyComp` (Battle Shout at pull,
+Well-Drilled +5 discipline). `--n 400`, seed 42, CLI stance defaults
+(offense 0.6, targeting 0.5, potion <35%), no plan (slice 5 adds plans):
+
+| Encounter | Setup | Kill rate | Note |
+|---|---|---|---|
+| Forge Whelps | default | 100%, ~0:25 | trash = time cost, tank AoE-threat check |
+| Slagmaw | default | **97.5%** | Normal law holds; deaths = eruption+surge stacking |
+| Slagmaw | starter | 62.7% | the gear wall |
+| Slagmaw | starter + ward,potion each | **93.8%** | preparation buys earliness (§6) |
+| Slagmaw | resist sets | 99.5% | fire-resist chests are the gear answer in anger |
+| Vulkan | default | **97.0%** | Normal law holds |
+| Vulkan | starter | 46.3% | phase-2 overlap kills (melee/sentries 95% of deaths) — hold-DPS plan is the slice-5 knowledge answer |
+| Vulkan | starter + ward,potion each | 98.8% | ward counters sentry fire melee + blasts |
+
+Slagmaw numbers: hp 62k, melee 300/2.0s phys, Molten Eruption 700 fire
+party-wide /35s, surges 420, enrage 6:00 (backstop; TTK ~4:22).
+Vulkan: hp 55k, melee 150/2.1s, Forge Blast 450 fire party-wide /45s,
+phase 2 at 50%: 2× Molten Sentry (1.5k HP, 45 fire/1.8s) per 35s wave,
+tantrum ×1.7 after 25s. Sentries spawn onto the healer (heal aggro) until
+the tank Thunder Claps — visible in streams, tested.
 
 ## Balance state (Cinder Maw, current numbers — slice 5 retune)
 
@@ -388,6 +422,34 @@ alternative. Grouped by slice as they land.
 - **Heal decision scoring skips targets above 95% HP** so healers never
   spam full-HP heals; group heal beats single heal via a 1.6× breadth
   boost on average deficit. Placeholder balance, tuned in slice 2.
+
+**Slice 2 (trinity kits + Ember Forge):**
+
+- **Battle Shout requires 1 warrior, not the GDD's "2× warrior" example**
+  — comp rules are sized to the 3-char v1 roster (there is exactly one
+  warrior to bring). Rejected: literal 2-warrior requirement (dead
+  content until phase 5). Arcane Convergence (priest+mage resource
+  refill) is **not shipped** — v1 has no resource system to refill;
+  revisit with phase-5 comp depth. Well-Drilled Team (3 distinct roles →
+  +5 discipline each) ships as the third GDD example.
+- **Divine Hymn is an on-GCD emergency heal under the auto policy**
+  (scored only at ≥35% average party deficit, then it beats everything)
+  rather than plan-only. Law 2: defaults must work without a plan; plans
+  and calls will fire it deliberately for more value. Rejected: plan-only
+  (defaults would waste the kit) and always-scored (wasted on scratches).
+- **New classes never get the legacy free kit potion** — their
+  `consumables` default is `[]` (crafted-economy semantics from birth).
+  The free potion is a mage-only backward-compat artifact.
+- **Vulkan's hold-DPS pressure is emergent from tuning** (HP-triggered
+  adds + timed blast overlap), not a new mechanic type — the machinery
+  stays types 1–3 as §4 requires for the starter dungeon. The "mechanic
+  type upgrades" checklist item = group-aware upgrades: timeline
+  abilities hit the whole party, movement windows roll per character,
+  adds spawn onto healer aggro.
+- **Dungeon trash gives 0 XP** (`xpPerKill: 0` on Forge Whelps) — party
+  members are at cap and dungeon reward loops (loot) are phase-5 scope;
+  trash is a time/consumable cost, not a farm. Rejected: XP-bearing
+  trash (nothing to spend it on at cap 10).
 
 ## Environment notes
 

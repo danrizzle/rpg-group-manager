@@ -29,6 +29,8 @@ export interface Item {
   name: string;
   slot: GearSlot;
   tier: 1 | 2 | 3;
+  /** Classes that can equip this item. Absent = any class. */
+  classes?: string[];
   bonuses: ItemBonuses;
 }
 

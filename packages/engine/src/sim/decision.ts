@@ -74,6 +74,14 @@ export function chooseAction(ctx: DecisionContext): Ability | null {
       deficit = 1 - ctx.hpPct;
     }
     if (deficit < 0.05) continue;
+    // Heal CDs (Divine Hymn) are precious: the auto policy holds them for
+    // emergencies, then lets them beat everything. Plans/calls fire them
+    // deliberately (slices 5–6).
+    if (a.tags.includes('heal-cd')) {
+      if (deficit < 0.35) continue;
+      scored.set(a, 2.5 * deficit);
+      continue;
+    }
     scored.set(a, weight * deficit);
   }
 

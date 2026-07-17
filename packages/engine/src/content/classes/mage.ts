@@ -112,8 +112,10 @@ export function makeMage(
     MAGE_TALENTS,
     talents,
   );
+  // id/class/role matter only in party fights (solo actors are PLAYER_ID).
+  const identity = { id: 'mage', name: 'Elara', classId: 'mage', role: 'dps' as const };
   if (consumables === undefined) {
-    return { name: 'Elara', ...talented };
+    return { ...identity, ...talented };
   }
   const { passives, actives, summary } = normalizeConsumables(consumables);
   const folded = foldBonuses(
@@ -122,7 +124,7 @@ export function makeMage(
     passives.map((p) => p.bonuses),
   );
   return {
-    name: 'Elara',
+    ...identity,
     stats: folded.stats,
     behavior: folded.behavior,
     abilities: [...talented.abilities, ...actives],

@@ -26,6 +26,8 @@ export interface CharacterDef {
   name: string;
   /** Trinity role (party fights); informational — behavior comes from the kit. */
   role?: CharacterRole;
+  /** Class id ('warrior' | 'priest' | 'mage' | …) — comp rules key on it. */
+  classId?: string;
   stats: CombatStats;
   behavior: BehaviorStats;
   /** Full kit including the potion (tag 'consumable', offGcd). */
@@ -543,7 +545,13 @@ export class Fight {
       this.emit({
         type: 'death',
         source: char.actor.id,
-        meta: { killedBy: meta['abilityId'] ?? source },
+        // Party wipe stories need the attacker, not just the ability
+        // ('melee' from the boss vs a sentry differ). Party-only meta —
+        // solo streams stay byte-identical.
+        meta: {
+          killedBy: meta['abilityId'] ?? source,
+          ...(this.setup.party ? { killedBySource: source } : {}),
+        },
       });
       // The fight is lost only when the whole party is down (a solo fight is
       // a party of one, so the pre-party semantics are unchanged).
