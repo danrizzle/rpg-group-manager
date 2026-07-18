@@ -334,9 +334,10 @@ loot) are still open and bind from there on. As of July 2026.
       web inside every slice; byte-identity for all existing streams when new
       args are absent; CLI `--json` baselines captured pre-change and
       byte-compared — the 3-char dungeon streams join the 7 solo baselines).
-      Scope is fixed by **GDD §8 Law 1's Raid row — exactly three new
-      player-facing systems: full call palette, loadout library, tank
-      swaps** (affixes/Mythic stay invisible); everything else in this phase
+      **Raids are 10-man** (resolved 2026-07-18; the GDD's "up to 20" in §2/§4
+      is superseded and owes an amendment). Scope is fixed by **GDD §8 Law 1's
+      Raid row — exactly three new player-facing systems: full call palette,
+      loadout library, tank swaps** (affixes/Mythic stay invisible); everything else in this phase
       is machinery underneath those three. Law 2 applies throughout: tank
       swaps, dispels and a 20-char roster all need working auto behavior.
       **Open design questions are logged below the slice list — several are
@@ -408,19 +409,22 @@ loot) are still open and bind from there on. As of July 2026.
         talent trees make it meaningful; and nothing interlocks world tasks
         with dungeon pulls — you can pull while heroes are mid-travel, which
         matches the pre-existing behaviour that pulls never checked location.
-  - [ ] **Slice 2 — Raid-scale party (engine).** `MAX_PARTY_SIZE` 5 → 20
-        (`sim/engine.ts`; the ceiling test in `test/party.test.ts` asserts a
-        6-member party throws — it must move, this is not a bare constant
-        bump). The constant is trivial; the *tuning coupling* is the slice:
+  - [ ] **Slice 2 — Raid-scale party (engine).** `MAX_PARTY_SIZE` 5 → **10**
+        (raids are 10-man — see the resolved design question below;
+        `sim/engine.ts`, and the ceiling test in `test/party.test.ts` asserts a
+        6-member party throws, so it must move to 11 — this is not a bare
+        constant bump). The constant is trivial; the *tuning coupling* is the
+        slice, and 10-man softens every cliff without removing any of them.
+        Tune against the canonical **2 tanks / 3 healers / 5 dps** comp:
         effect `target: 'party'` returns every living char, so a group heal
-        balanced for 3 becomes 20× throughput — needs a bounded variant
+        balanced for 3 becomes 3.3× throughput — still needs a bounded variant
         (`{kind:'group'; maxTargets}`); heal threat feeds EVERY living enemy
-        at 0.5×, so 3–5 healers bury tank threat; per-character movement-fail
-        rolls make "someone stands in fire" a certainty rather than a risk at
-        20 (needs a fails-≥N tolerance); and the healer AI averages deficit
-        over all allies (`sim/decision.ts`), so one dying tank barely moves a
-        20-pool average — role-weight it. Byte-identity for every solo +
-        3-char stream. No web work.
+        at 0.5×, so 3 healers still out-threat the tanks; per-character
+        movement-fail rolls make "someone stands in fire" likely rather than
+        certain at 10 (needs a fails-≥N tolerance); and the healer AI averages
+        deficit over all allies (`sim/decision.ts`), so a dying tank is
+        diluted in a 10-pool average — role-weight it. Byte-identity for every
+        solo + 3-char stream. No web work.
   - [ ] **Slice 3 — Mechanics as a list + boss-applied debuffs + enemy cast
         windows (engine).** `BossDefinition` is today a flat record of
         singleton mandatory fields (one `movementWindows`, one `addPhase` —
@@ -559,11 +563,21 @@ The GDD specifies phase-5 *features* but is silent on several rules the
 slices depend on. Each needs a decision, and the decision should be
 back-filled into DESIGN.md rather than living only here.
 
-1. **Raid size for the first raid.** §2/§4 say only "up to 20 characters",
-   never a per-encounter size. Recommendation: **raise `MAX_PARTY_SIZE` to
-   20 so the engine is never the limit, but tune the tier-2 raid at 10** —
-   it halves the tuning surface (see the slice-1 balance cliffs) and keeps a
-   real step left for a later raid. The roster still grows to 20.
+1. ~~**Raid size for the first raid.**~~ **RESOLVED (user, 2026-07-18): raids
+   are 10-man, full stop.** `MAX_PARTY_SIZE` becomes **10** — a hard ceiling,
+   not headroom; if a later raid ever needs more, bump it then (the "no
+   content scaling" law means sizes are content decisions, not knobs). The
+   canonical tuning comp is **2 tanks / 3 healers / 5 dps** — it pins the
+   group-heal breadth and healer-threat numbers, and it satisfies §4 type-4's
+   only hard comp requirement (tank-swap debuffs need 2 tanks).
+   **GDD amendment owed:** §2's stage table ("Endgame | up to 20 characters")
+   and §4's content formats ("raids (up to 20 chars)") both say 20 and must be
+   corrected to 10-man raids. **Still open:** the ROSTER size, which is a
+   separate number from the raid size — a roster larger than 10 is what makes
+   benching, rotation and division of labor real (and per-character queues now
+   give every roster member something to do). Recommendation: ~12, i.e. a
+   10-man raid plus genuine bench depth, rather than the GDD's 20 (which is a
+   lot of per-character queue UI to manage for little added depth).
 2. **Roster slot schedule.** §2 says slots are "unlocked via progression
    milestones (not bought)" and that is the entire spec. Needs a concrete
    ramp (e.g. 3 → 5 → 10 → 20 pinned to region/raid milestones). Note the
