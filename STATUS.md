@@ -3,9 +3,11 @@
 > Update this file whenever a slice lands. Roadmap definition: DESIGN.md §10.
 
 **Phase 4 (Group content) COMPLETE — all 6 slices done (party sim, trinity +
-Ember Forge, roster/dungeon web, boss journal, boss plans, live calls). Next
-up: phase 5 (roster & raids: 20 chars, loadout library, full call palette,
-mechanic type 4, tier-2 content, access buildings).** As of July 2026.
+Ember Forge, roster/dungeon web, boss journal, boss plans, live calls).**
+Next up: phase 5 (roster & raids) — a **7-slice plan is authored below and no
+phase-5 code exists yet**. Resolve the open design questions first (raid size,
+slot schedule, lockouts, loot), then start slice 1 (raid-scale party, engine).
+As of July 2026.
 
 ## Phase checklist
 
@@ -15,7 +17,7 @@ mechanic type 4, tier-2 content, access buildings).** As of July 2026.
 - [x] **Phase 2 — Browser prototype (= MVP)**: intent panel, real-fight replay
       (bars + log, playback), training-dummy review (kill %, DPS histogram,
       TTK, mistakes). Monte Carlo in a Web Worker.
-- [ ] **Phase 3 — Progression**
+- [x] **Phase 3 — Progression**
   - [x] Slice 1 — Gear: item model + catalog (4 slots × 3 tiers,
         resist/behavior tradeoff pieces), gear picker, outgearing curve verified
   - [x] World & leveling **design** (GDD v0.4): level system + unlock arc
@@ -326,13 +328,181 @@ mechanic type 4, tier-2 content, access buildings).** As of July 2026.
         → divine-hymn plan entry → next pull fires "PLAN — Seren: Divine
         Hymn!"; solo Cinder Maw unchanged. All 126 engine tests green; web
         typecheck + build clean.
-- [ ] **Phase 5 — Roster & raids**: 20 chars, loadout library, full call
-      palette, mechanic type 4, tier-2 catalyst content, access buildings
+- [ ] **Phase 5 — Roster & raids** (slice plan authored 2026-07-18, before
+      any phase-5 code; same cross-cutting gates as phase 4: engine before
+      web inside every slice; byte-identity for all existing streams when new
+      args are absent; CLI `--json` baselines captured pre-change and
+      byte-compared — the 3-char dungeon streams join the 7 solo baselines).
+      Scope is fixed by **GDD §8 Law 1's Raid row — exactly three new
+      player-facing systems: full call palette, loadout library, tank
+      swaps** (affixes/Mythic stay invisible); everything else in this phase
+      is machinery underneath those three. Law 2 applies throughout: tank
+      swaps, dispels and a 20-char roster all need working auto behavior.
+      **Open design questions are logged below the slice list — several are
+      GDD gaps phase 5 must invent and should be back-filled into DESIGN.md.**
+  - [ ] **Slice 1 — Raid-scale party (engine).** `MAX_PARTY_SIZE` 5 → 20
+        (`sim/engine.ts`; the ceiling test in `test/party.test.ts` asserts a
+        6-member party throws — it must move, this is not a bare constant
+        bump). The constant is trivial; the *tuning coupling* is the slice:
+        effect `target: 'party'` returns every living char, so a group heal
+        balanced for 3 becomes 20× throughput — needs a bounded variant
+        (`{kind:'group'; maxTargets}`); heal threat feeds EVERY living enemy
+        at 0.5×, so 3–5 healers bury tank threat; per-character movement-fail
+        rolls make "someone stands in fire" a certainty rather than a risk at
+        20 (needs a fails-≥N tolerance); and the healer AI averages deficit
+        over all allies (`sim/decision.ts`), so one dying tank barely moves a
+        20-pool average — role-weight it. Byte-identity for every solo +
+        3-char stream. No web work.
+  - [ ] **Slice 2 — Mechanics as a list + boss-applied debuffs + enemy cast
+        windows (engine).** `BossDefinition` is today a flat record of
+        singleton mandatory fields (one `movementWindows`, one `addPhase` —
+        Slagmaw disables adds with `atHpPct: 0`), and `installBoss` is a
+        hardcoded function, not a registry. Refactor to
+        `mechanics: Mechanic[]` (discriminated union) with types 1–3
+        re-expressed as data and **all three existing bosses byte-identical**;
+        update the `redactBoss` journal-redaction path + `sim/bosses.ts`.
+        Add the missing boss→player path: `TimedBossAbility` gains an optional
+        `applies: BuffEffect` + target mode (`current-tank`/`random`/`all`) —
+        today `bossScript` can't touch `Actor.applyBuff` at all (the tantrum
+        "buff" is a cosmetic event with the real effect in a closure). Add
+        enemy **cast windows** (`castStart` + a real cast duration; today the
+        boss emits a bare `castEnd` with nothing to interrupt) — the
+        prerequisite for interrupts, deferred here from phase 4. Doing this
+        refactor BEFORE authoring tier-2 content is the whole point of the
+        slice ordering.
+  - [ ] **Slice 3 — Type-4 machinery: stacking debuffs, taunt, dispel,
+        interrupt (engine).** GDD §4 type 4 = tank-swap debuffs (hard comp
+        requirement: 2 tanks), mandatory dispels, absorb shields — raid only.
+        `applyBuff` currently **refreshes rather than stacks**, which makes the
+        canonical tank-swap design structurally impossible: add
+        `ActiveBuff.stacks` + `maxStacks` + per-stack `damageTakenMult`.
+        Taunt is a genuine engine change (`addThreat` is private, `pickTarget`
+        recomputes top threat every swing with no stickiness): add a
+        `{kind:'taunt'}` effect + a `forcedTarget` window consulted in
+        `pickTarget`, plus a `targetChanged` event — **threat is currently
+        invisible in the stream, so without it a tank swap is unobservable
+        gameplay.** Dispel: `{kind:'dispel'}` effect + `Actor.removeBuff` (no
+        such method today) + a `dispelType` category on `BuffEffect` +
+        `buffRemoved`. Absorb already exists (`BuffEffect.absorb`) — verify at
+        raid scale. Auto policies for both (Law 2). **Pre-work: fix the
+        latent `sanitizePlan` fall-through** — after the `holdDps`/`ability`
+        early returns it reads `action.patch` unguarded, so any new action
+        kind throws on every persisted plan; `describe` in `planRunner` has
+        the same unguarded fallback.
+  - [ ] **Slice 4 — Battle res + retreat (engine + web).** Per ground rule 1
+        these are the *only* two calls needing engine work beyond effects.
+        **Battle res** is `{kind:'ability'}` with a new `resurrect` effect:
+        `Actor.alive` is one-way today (nothing flips it back, and `heal()`
+        would raise HP on a corpse leaving `alive === false`), so add
+        `Actor.resurrect(hpPct)`, a `deadChars()` selector, a `resurrect`
+        event + replay handling, and — easy to miss — **restart the revived
+        character's decide loop**, which returns without rescheduling on
+        death (otherwise: revived but idle forever). Scarcity (1–2/attempt,
+        §3) rides the existing `Ability.chargesPerFight`. Note the fight ends
+        synchronously on the last death, so a res can never be issued after a
+        wipe — a design-consistent constraint worth stating in the UI.
+        **Retreat** is the one genuinely new `PlanAction` kind: `FightResult`
+        has no early-exit (`end()` is only reachable via kill/wipe/enrage/
+        timeout), so add a `'retreat'` `FightResultKind` threaded through
+        `analysis/metrics.ts`, `AttemptSummary.result` and `finalizeFight`.
+        "Saves remaining consumables" is nearly free — consumption is already
+        computed from the final stream in `finalizeFight` (slice 4.6).
+  - [ ] **Slice 5 — Uniform `characters{}` roster + slot milestones (web,
+        persist v9).** The highest-risk slice. Elara still lives in the
+        store's legacy top-level fields while Borin/Seren are `RosterBuild`s
+        — and the two shapes carry **different data**: `RosterBuild` has no
+        `behavior`, no `talents`, no `xp` (recruits are hardcoded to
+        `DEFAULT_BEHAVIOR.discipline` and level 10). So this is **not a
+        rename — it requires inventing per-character behavior/talents/XP for
+        recruits, a design decision, not a refactor.** Generalize
+        `RosterCharId` off its 2-value union, re-key into `characters{}`,
+        and update every consumer: ~8 components (`RosterCharacterPanel` is
+        the template to generalize), `buildSimRequest`'s `Pick<>` list, both
+        pull paths, the grind `rateKey`, and the **worker's parallel
+        `SimRequest` shape** (`sim/worker.ts` hand-builds the literal
+        `[warrior, priest, mage]` 3-tuple twice). Migration must preserve
+        `PlanAction.charId` values (`'warrior'|'priest'|'mage'`) or rewrite
+        persisted plans; `familiarity` is already string-keyed and needs no
+        change. Follow the existing hybrid migrate pattern (versioned blocks
+        for destructive resets + unconditional idempotent backfills). Slots
+        arrive via progression milestones, never purchase (§2) — schedule
+        below.
+  - [ ] **Slice 6 — Loadout library + full call palette + recruit talent
+        trees (web).** Loadouts today are Elara-only, keyed by `name`, with
+        no character binding, no `behavior`, and mage-only talents. Add an
+        `id` + `charId`/`classId` scoping (applying a warrior loadout to a
+        priest currently sanitizes gear/talents to empty — a silent bad
+        failure), `behavior`, per-boss assignment, and grouping/filter UI
+        (a flat list does not survive 20 chars × N loadouts). Per §4 the
+        library **also holds boss plans**. Warrior/priest talent trees land
+        here because loadouts are meaningless without them (deferred from
+        phase 4). Full call palette (§3 catalog): the remaining offensive/
+        defensive/tactical calls incl. interrupt reassignment and tank swap —
+        all `{kind:'ability'}` actions, so this is content + UI, not engine.
+        `PlanPanel`'s 9 hardcoded actions and `FightView`'s `ALL_CDS`/
+        `HEAL_CD` literals must become **roster-derived**. Per Law 1's
+        progressive disclosure, the palette unlocks incrementally — never 15
+        buttons at once. Watch the respec cost: bulk-applying 20 loadouts
+        must not charge 20 respecs.
+  - [ ] **Slice 7 — Tier-2 raid + catalyst progression + access building
+        (content + web).** The first raid, gated behind an **access
+        building** (§5: "use it deliberately at raids and tier transitions" —
+        the bridge is the v1 precedent, escalated to profession-made
+        materials via Blacksmithing). Bosses use type-4 mechanics from
+        slices 2–3, tuned to the Law-2 targets: Normal ≥ ~90% on auto plan +
+        adequate gear; Heroic with a stat-proof ceiling no gear level
+        rescues. Catalyst model (§6): tier-2 gear is crafted with materials
+        from tier-1 content, keeping Ember Forge permanently relevant — plus
+        resist gear from older regions. Group CD `requires` counts already
+        scale, but `minDistinctRoles` is trivially true at raid size (only 3
+        roles exist) — raid comp rules want **ratios** (≥2 tanks, ≥4
+        healers). Also note the comp rule "first member of the class carries
+        the CD" is an order-dependent identity check: **reordering the roster
+        silently moves which character holds the raid CD and invalidates
+        persisted plans referencing `charId`.**
 - [ ] **Phase 6 — Guilds**: accounts/sync, server-authoritative real fights
       (Fastify + Postgres, same engine), guild bank, world bosses
 - [ ] **Phase 7 — Expansion stages** (as needed): traits, council/split/soak,
       difficulty tiers, affixes, timed runs, behavior-effect uniques,
       graphical replay
+
+## Phase 5 — open design questions (GDD gaps to resolve before slice 1)
+
+The GDD specifies phase-5 *features* but is silent on several rules the
+slices depend on. Each needs a decision, and the decision should be
+back-filled into DESIGN.md rather than living only here.
+
+1. **Raid size for the first raid.** §2/§4 say only "up to 20 characters",
+   never a per-encounter size. Recommendation: **raise `MAX_PARTY_SIZE` to
+   20 so the engine is never the limit, but tune the tier-2 raid at 10** —
+   it halves the tuning surface (see the slice-1 balance cliffs) and keeps a
+   real step left for a later raid. The roster still grows to 20.
+2. **Roster slot schedule.** §2 says slots are "unlocked via progression
+   milestones (not bought)" and that is the entire spec. Needs a concrete
+   ramp (e.g. 3 → 5 → 10 → 20 pinned to region/raid milestones). Note the
+   base has no barracks and **must not get one** — a purchasable building
+   would contradict the "not bought" rule.
+3. **Raid lockouts / weekly resets.** The word "lockout" does not appear in
+   the GDD. Combined with "no auction house, self-found" (§6) and "time
+   gating sits on acquisition" (§1), the default reading is **unlimited
+   attempts**. Recommendation: no lockouts in v1; revisit with guilds
+   (phase 6), where shared kills already imply windows.
+4. **Loot rules.** Undefined — "loot" appears only as a yes/no column in the
+   sim-vs-real table. Catalyst progression (§6) is meaningless without drop
+   tables, per-roster distribution, and some bad-luck protection. This is
+   the largest genuine gap.
+5. **Benching / roster rotation.** Never mentioned, but per-character boss
+   familiarity (§2) creates an implicit anti-rotation pressure: a benched
+   character is an unfamiliar one. Either accept that as intended depth or
+   add a catch-up rule. Related: no character fatigue/rest system exists,
+   and §3's "no recovery debuffs" argues against inventing one.
+6. **Tactical pause in raids.** §3 ground rule 3 hedges — "at least in
+   solo/group content". It is already built and mobile-friendly;
+   recommendation: **keep it in raids** and drop the hedge from the GDD.
+7. **Dispel has no call.** §4 makes dispels mandatory at raid tier and §2
+   gives the priest "dispel (relevant from raid tier)", but the §3 call
+   catalog contains no dispel call. Decide whether dispels are auto-only
+   (Law 2), plan-assignable, or get a palette button.
 
 ## Balance state (Ember Forge, phase-4 slice 2)
 
