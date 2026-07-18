@@ -1,29 +1,25 @@
-import { levelForXp } from '@rpg/engine';
 import { useEffect } from 'react';
-import { useStore } from '../store';
+import { useCharBuild, useStore } from '../store';
 import { MULTIPLIER_PRESETS, REGIONS, buildHash } from '../world/tasks';
 import { DungeonPanel } from './DungeonPanel';
 import { QueueStrip } from './QueueStrip';
 import { RegionCard } from './RegionCard';
 
 export function WorldMapPanel() {
-  const xp = useStore((s) => s.xp);
-  const gear = useStore((s) => s.gear);
-  const stance = useStore((s) => s.stance);
-  const behavior = useStore((s) => s.behavior);
-  const talents = useStore((s) => s.talents);
-  const region = useStore((s) => s.region);
+  const charId = useStore((s) => s.activeWorldChar);
+  const b = useCharBuild(charId);
+  const region = useStore((s) => s.chars[s.activeWorldChar].region);
   const multiplier = useStore((s) => s.multiplier);
   const setMultiplier = useStore((s) => s.setMultiplier);
   const requestGrindRates = useStore((s) => s.requestGrindRates);
 
-  const level = levelForXp(xp);
-  const build = buildHash(gear, stance, behavior, talents);
+  const build = buildHash(b.gear, b.stance, b.behavior, b.talents);
 
-  // Warm the per-zone rate cache for the current build (deduped in the store).
+  // Warm the per-zone rate cache for the ACTING character's build (deduped in
+  // the store). Rates are per character now, so switching hero re-warms.
   useEffect(() => {
-    for (const r of REGIONS) requestGrindRates(r.id);
-  }, [level, build, requestGrindRates]);
+    for (const r of REGIONS) requestGrindRates(charId, r.id);
+  }, [charId, b.level, build, requestGrindRates]);
 
   return (
     <section className="panel map-panel">

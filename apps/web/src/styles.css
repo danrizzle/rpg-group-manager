@@ -164,6 +164,16 @@ body {
 .playback { display: flex; align-items: center; gap: 6px; margin: 10px 0; }
 .scrubber { flex: 1; accent-color: var(--gold); }
 
+/* Per-character task queues (phase-5 slice 1): one lane per hero, parallel. */
+.queue-hint { font-size: 11px; margin: 0 0 6px; }
+.queue-lane {
+  margin-bottom: 8px; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--panel-edge); background: #14100b;
+}
+.queue-lane-acting { border-color: var(--gold); }
+.queue-lane-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.queue-lane-head .muted { font-size: 11px; }
+
 /* Live-call palette (slice 6): the tactical-pause action bar. */
 .call-palette {
   display: flex; align-items: center; gap: 6px; margin: 10px 0 0;

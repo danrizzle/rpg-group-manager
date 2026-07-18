@@ -4,10 +4,11 @@
 
 **Phase 4 (Group content) COMPLETE — all 6 slices done (party sim, trinity +
 Ember Forge, roster/dungeon web, boss journal, boss plans, live calls).**
-Next up: phase 5 (roster & raids) — a **7-slice plan is authored below and no
-phase-5 code exists yet**. Resolve the open design questions first (raid size,
-slot schedule, lockouts, loot), then start slice 1 (raid-scale party, engine).
-As of July 2026.
+Phase 5 (roster & raids) is under way on a **7-slice plan**: slice 1
+(per-character task queues) has **landed** — reordered to the front after play
+showed the recruits had no world presence. Next is slice 2 (raid-scale party,
+engine); the raid-side design questions (raid size, slot schedule, lockouts,
+loot) are still open and bind from there on. As of July 2026.
 
 ## Phase checklist
 
@@ -340,7 +341,74 @@ As of July 2026.
       swaps, dispels and a 20-char roster all need working auto behavior.
       **Open design questions are logged below the slice list — several are
       GDD gaps phase 5 must invent and should be back-filled into DESIGN.md.**
-  - [ ] **Slice 1 — Raid-scale party (engine).** `MAX_PARTY_SIZE` 5 → 20
+  - [x] **Slice 1 — Roster world presence: per-character task queues (web,
+        persist v9). ← LANDED (reordered to the front 2026-07-18).**
+        **Found in play:** killing Cinder Maw grants Borin + Seren, but the
+        world loop still models exactly ONE traveling character — `queue` is a
+        single global `Task[]`, `region` a single global position, and
+        `BaseTask` carries no `charId`. Queuing "send Borin to gather" just
+        appends to Elara's one serial queue, so the recruits are inert outside
+        dungeons and stacked travels silently cancel each other out. This
+        contradicts the GDD's core mid-game pillar — §2 "Division of labor:
+        one fights, one farms/crafts" and §5's task-queue mock, which shows
+        three characters running **parallel** chains (gatherer / crafter /
+        fighter). It is a phase-3 artifact: the world loop was built when
+        there was one character, and phase 4 generalized only the *dungeon*
+        path. **Scope:** `charId` on every task; per-character position;
+        `advanceWorld` folds N independent queues in parallel (same pure
+        reducer, same offline catch-up + "while you were away" summary);
+        per-character grind rates (each character has their own gear/level,
+        so `rateKey`/`rateCache` become per-character); a queue strip per
+        character and a character target on the region-card actions. Folded
+        in (was slice 5): the uniform `characters{}` record replacing Elara's
+        legacy top-level fields + the `roster` split, so this migrates the
+        character model **once** rather than twice. Caveat that makes this
+        the risk slice: `RosterBuild` has **no `behavior`, no `talents`, no
+        `xp`** (recruits are hardcoded to `DEFAULT_BEHAVIOR.discipline` and
+        level 10), so a uniform record is not a rename — it needs those
+        invented, or the asymmetry kept behind uniform selectors until the
+        loadout slice needs per-class talents. Touches ~8 components
+        (`RosterCharacterPanel` is the template), `buildSimRequest`'s `Pick<>`
+        list, both pull paths, and the worker's parallel `SimRequest` shape.
+        Slots arrive via progression milestones, never purchase (§2) — the
+        base must NOT get a barracks. Reordered ahead of the engine slices
+        because they are independent of it, it is player-visible today, and
+        slice 4's tank swap needs ≥2 tanks (i.e. this generalization) anyway.
+        **Landed:** `WorldCharId`/`WORLD_CHARS`/`CharWorld` in `world/types.ts`
+        (keyed by engine class id so it lines up with `familiarity` and
+        `PlanAction.charId`); `charId` on `BaseTask` and `AwayEvent`;
+        `chars: Record<WorldCharId, CharWorld>` replaces the single
+        `queue`/`region`. **`advanceWorld` is untouched** — a new `advanceAll`
+        wrapper folds the SAME `elapsedGameMs` through each character's queue
+        in the fixed `WORLD_CHARS` order, threading the shared bank from one to
+        the next so the capacity clamp stays deterministic (without a fixed
+        order, live ticks and offline catch-up could disagree). All four
+        enqueues + `requestGrindRates` take a `charId`; `cancelTask` scans
+        lanes by id (ids are unique roster-wide). Per-character grind rates:
+        `rateKey` gains a leading char discriminator and `GrindRequest.charId`
+        dispatches the worker to `makeWarrior`/`makePriest`/`makeMage` — Borin
+        and Elara in the same zone are genuinely different rates.
+        `useCharBuild(charId)` is the uniform build selector phase 4 promised
+        but never wrote (each field selected separately so subscriptions stay
+        reference-stable). UI: one queue lane per hero with an acting-character
+        picker (`activeWorldChar`, shared by the World map and the Base
+        alchemy panel), away-summary lines attributed ("Borin: Gathered 40
+        timber"). Persist v9 via the unconditional-backfill pattern: the
+        pre-v9 single queue + position migrate onto Elara verbatim and the
+        recruits start idle beside her. Verified in-browser: v8→v9 kept a
+        4-task queue with head accrual intact; three heroes gathered three
+        different materials **simultaneously** (timber/sunleaf/emberbloom all
+        rising in one tick); offline catch-up folded all three lanes with
+        per-character attribution; dungeon pull unaffected; console clean.
+        **v1 simplifications** (recorded, not bugs): grind XP credits Elara
+        only — recruits arrive at the level cap so a shared pool would just
+        inflate her level; recruits still have no behavior/talents/xp of their
+        own (class defaults + level 10 behind `useCharBuild`), so the full
+        `characters{}` **build** migration moves to slice 6 where per-class
+        talent trees make it meaningful; and nothing interlocks world tasks
+        with dungeon pulls — you can pull while heroes are mid-travel, which
+        matches the pre-existing behaviour that pulls never checked location.
+  - [ ] **Slice 2 — Raid-scale party (engine).** `MAX_PARTY_SIZE` 5 → 20
         (`sim/engine.ts`; the ceiling test in `test/party.test.ts` asserts a
         6-member party throws — it must move, this is not a bare constant
         bump). The constant is trivial; the *tuning coupling* is the slice:
@@ -353,7 +421,7 @@ As of July 2026.
         over all allies (`sim/decision.ts`), so one dying tank barely moves a
         20-pool average — role-weight it. Byte-identity for every solo +
         3-char stream. No web work.
-  - [ ] **Slice 2 — Mechanics as a list + boss-applied debuffs + enemy cast
+  - [ ] **Slice 3 — Mechanics as a list + boss-applied debuffs + enemy cast
         windows (engine).** `BossDefinition` is today a flat record of
         singleton mandatory fields (one `movementWindows`, one `addPhase` —
         Slagmaw disables adds with `atHpPct: 0`), and `installBoss` is a
@@ -370,7 +438,7 @@ As of July 2026.
         prerequisite for interrupts, deferred here from phase 4. Doing this
         refactor BEFORE authoring tier-2 content is the whole point of the
         slice ordering.
-  - [ ] **Slice 3 — Type-4 machinery: stacking debuffs, taunt, dispel,
+  - [ ] **Slice 4 — Type-4 machinery: stacking debuffs, taunt, dispel,
         interrupt (engine).** GDD §4 type 4 = tank-swap debuffs (hard comp
         requirement: 2 tanks), mandatory dispels, absorb shields — raid only.
         `applyBuff` currently **refreshes rather than stacks**, which makes the
@@ -389,7 +457,7 @@ As of July 2026.
         early returns it reads `action.patch` unguarded, so any new action
         kind throws on every persisted plan; `describe` in `planRunner` has
         the same unguarded fallback.
-  - [ ] **Slice 4 — Battle res + retreat (engine + web).** Per ground rule 1
+  - [ ] **Slice 5 — Battle res + retreat (engine + web).** Per ground rule 1
         these are the *only* two calls needing engine work beyond effects.
         **Battle res** is `{kind:'ability'}` with a new `resurrect` effect:
         `Actor.alive` is one-way today (nothing flips it back, and `heal()`
@@ -407,26 +475,6 @@ As of July 2026.
         `analysis/metrics.ts`, `AttemptSummary.result` and `finalizeFight`.
         "Saves remaining consumables" is nearly free — consumption is already
         computed from the final stream in `finalizeFight` (slice 4.6).
-  - [ ] **Slice 5 — Uniform `characters{}` roster + slot milestones (web,
-        persist v9).** The highest-risk slice. Elara still lives in the
-        store's legacy top-level fields while Borin/Seren are `RosterBuild`s
-        — and the two shapes carry **different data**: `RosterBuild` has no
-        `behavior`, no `talents`, no `xp` (recruits are hardcoded to
-        `DEFAULT_BEHAVIOR.discipline` and level 10). So this is **not a
-        rename — it requires inventing per-character behavior/talents/XP for
-        recruits, a design decision, not a refactor.** Generalize
-        `RosterCharId` off its 2-value union, re-key into `characters{}`,
-        and update every consumer: ~8 components (`RosterCharacterPanel` is
-        the template to generalize), `buildSimRequest`'s `Pick<>` list, both
-        pull paths, the grind `rateKey`, and the **worker's parallel
-        `SimRequest` shape** (`sim/worker.ts` hand-builds the literal
-        `[warrior, priest, mage]` 3-tuple twice). Migration must preserve
-        `PlanAction.charId` values (`'warrior'|'priest'|'mage'`) or rewrite
-        persisted plans; `familiarity` is already string-keyed and needs no
-        change. Follow the existing hybrid migrate pattern (versioned blocks
-        for destructive resets + unconditional idempotent backfills). Slots
-        arrive via progression milestones, never purchase (§2) — schedule
-        below.
   - [ ] **Slice 6 — Loadout library + full call palette + recruit talent
         trees (web).** Loadouts today are Elara-only, keyed by `name`, with
         no character binding, no `behavior`, and mage-only talents. Add an
@@ -466,7 +514,46 @@ As of July 2026.
       difficulty tiers, affixes, timed runs, behavior-effect uniques,
       graphical replay
 
-## Phase 5 — open design questions (GDD gaps to resolve before slice 1)
+## Phase 5 — autonomous design decisions
+
+**Slice 1 (per-character task queues):**
+
+- **`advanceWorld` kept byte-for-byte; parallelism lives in a new `advanceAll`
+  wrapper.** The reducer is the world's `Replay.seek` and has no test coverage
+  (all 13 test files are engine-side), so rewriting it to fold N queues would
+  have been an unguarded change to the one function both the live tick and
+  offline catch-up depend on. Rejected: generalizing `WorldSlice` to hold a
+  queue map (touches every accrual branch).
+- **Characters fold in a fixed order (mage → warrior → priest) against the
+  shared bank.** Materials/inventory are one pool with a capacity clamp, so
+  two heroes gathering into a nearly-full bank in the same step is
+  order-dependent by nature. A fixed order makes it deterministic, which is
+  what keeps the live tick and the one-shot catch-up convergent. Rejected:
+  interleaved time-slicing (finer-grained, but far more machinery for a
+  difference only visible at a full bank).
+- **Grind XP credits Elara only.** Recruits arrive at the level cap (10 =
+  MAX), so crediting a shared pool for their kills would silently inflate
+  Elara's level — the one thing XP still drives. Rejected: per-character XP
+  now (ripples into `levelForXp` at 6+ call sites, `talentPointsForLevel`, the
+  talent panel and `GrindRequest.level` for zero v1 gain); revisit when
+  recruits can level below cap.
+- **World presence split from the build model.** `characters{}` was going to
+  absorb Elara's legacy top-level fields in the same slice, but `RosterBuild`
+  has no behavior/talents/xp, so a uniform record would have meant *inventing*
+  recruit talents and XP mid-feature. Instead `useCharBuild` gives the uniform
+  read the codebase always claimed to have, and the storage migration waits
+  for slice 6 where per-class talent trees give it a reason to exist. The
+  `chars` record is additive, so slice 6 extends it rather than re-migrating.
+- **Rate cache keyed by character, not just build.** Two heroes can hold
+  identical gear and still grind at different rates (different kits), so the
+  class id leads `rateKey` and `GrindRequest.charId` picks the factory —
+  otherwise Borin would silently inherit Elara's cached mage rates.
+- **Craft tasks go on the acting character's queue** even though crafting is
+  location-independent. It keeps one rule ("a task belongs to whoever you sent
+  on it") and makes the crafter a real role per GDD §2. Rejected: a queue-less
+  global craft lane (a second scheduling concept for one task kind).
+
+## Phase 5 — open design questions (GDD gaps to resolve before the raid slices)
 
 The GDD specifies phase-5 *features* but is silent on several rules the
 slices depend on. Each needs a decision, and the decision should be

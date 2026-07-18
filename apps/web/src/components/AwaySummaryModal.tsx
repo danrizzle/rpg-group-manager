@@ -1,11 +1,17 @@
 import { useStore } from '../store';
 import { MATERIAL_LABELS, RECIPES_BY_ID } from '../world/professions';
 import { REGIONS } from '../world/tasks';
-import type { AwayEvent } from '../world/types';
+import { WORLD_CHAR_NAMES, type AwayEvent } from '../world/types';
 
 const regionName = (id?: string): string => REGIONS.find((r) => r.id === id)?.name ?? id ?? '';
 
+/** "Borin: Gathered 40 timber" — who did what, now that queues run in parallel. */
 function line(e: AwayEvent): string {
+  const who = e.charId ? `${WORLD_CHAR_NAMES[e.charId]}: ` : '';
+  return who + body(e);
+}
+
+function body(e: AwayEvent): string {
   switch (e.kind) {
     case 'travel':
       return `Arrived in ${regionName(e.to)}`;

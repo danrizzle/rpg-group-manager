@@ -94,6 +94,8 @@ export interface SimResponse {
 
 export interface GrindRequest {
   zone: ZoneId;
+  /** Which kit grinds — each character farms with their own class (slice 5.1). */
+  charId: 'mage' | 'warrior' | 'priest';
   stance: StanceConfig;
   behavior: BehaviorInput;
   gear: Record<GearSlot, string>;
@@ -103,7 +105,11 @@ export interface GrindRequest {
   baseSeed: number;
 }
 
-export type GrindResponse = GrindRates & { zone: ZoneId; level: number };
+export type GrindResponse = GrindRates & {
+  zone: ZoneId;
+  level: number;
+  charId: 'mage' | 'warrior' | 'priest';
+};
 
 export type WorkerRequest =
   | { kind: 'sim'; id: number; req: SimRequest }
@@ -195,15 +201,30 @@ function runGrind(req: GrindRequest): GrindResponse {
   // v1: grinding runs on the crafted-consumable economy with EMPTY slots —
   // the free legacy potion must not leak into AFK grinding. Per-task
   // consumable budgets are a possible follow-up.
+  // Each character grinds with their own kit. Recruits have no talents and no
+  // behavior overrides of their own (see RosterBuild) — the store passes the
+  // class defaults, matching what `pullEncounter` already builds them with.
+  const player =
+    req.charId === 'warrior'
+      ? makeWarrior(req.behavior, items, req.level, [])
+      : req.charId === 'priest'
+        ? makePriest(req.behavior, items, req.level, [])
+        : makeMage(req.behavior, items, req.level, req.talents, []);
   const raw = grindRates(
-    { player: makeMage(req.behavior, items, req.level, req.talents, []), stance: req.stance, pack },
+    { player, stance: req.stance, pack },
     DEFAULT_PULL_CYCLE,
     req.iterations,
     req.baseSeed,
   );
   // Overlevel devaluation is applied on top of the raw sim XP (no content scaling).
   const factor = devalue(1, req.level, packBandMax(pack));
-  return { ...raw, xpPerHour: raw.xpPerHour * factor, zone: req.zone, level: req.level };
+  return {
+    ...raw,
+    xpPerHour: raw.xpPerHour * factor,
+    zone: req.zone,
+    level: req.level,
+    charId: req.charId,
+  };
 }
 
 self.onmessage = (msg: MessageEvent<WorkerRequest>) => {

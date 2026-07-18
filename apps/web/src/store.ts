@@ -51,7 +51,7 @@ import type {
   WorkerResponse,
 } from './sim/worker';
 import { BOSS_FACTORIES } from './sim/bosses';
-import { advanceWorld } from './world/advance';
+import { advanceAll } from './world/advance';
 import {
   INITIAL_BUILDINGS,
   bankCapacity,
@@ -81,12 +81,15 @@ import type {
   Materials,
   RegionId,
   RosterCharId,
+  CharWorld,
   Task,
   TravelTask,
   Unlocks,
   View,
+  WorldCharId,
   ZoneId,
 } from './world/types';
+import { WORLD_CHARS } from './world/types';
 
 /** Fixed base seed: the dummy sim is reproducible; only setup changes results. */
 const SIM_BASE_SEED = 42;
@@ -423,26 +426,31 @@ interface Store {
   // --- world loop ---
   view: View;
   setView: (v: View) => void;
+  /** Elara's XP (v1: recruits arrive at the cap, so only she banks grind XP). */
   xp: number;
-  region: RegionId;
   unlocks: Unlocks;
   materials: Materials;
   inventory: Inventory;
   /** Home-base building tiers (0 = unbuilt); the bank starts at tier 1. */
   buildings: Record<BuildingId, number>;
   upgradeBuilding: (id: BuildingId) => void;
-  queue: Task[];
+  /** Per-character world presence: own position, own queue, run in parallel. */
+  chars: Record<WorldCharId, CharWorld>;
+  /** Who the map's task buttons act on (World + Base views share it). */
+  activeWorldChar: WorldCharId;
+  setActiveWorldChar: (c: WorldCharId) => void;
   lastSeenWall: number;
   multiplier: number;
   setMultiplier: (m: number) => void;
   awaySummary: AwaySummary | null;
   dismissAwaySummary: () => void;
   rateCache: Record<string, GrindResponse>;
-  requestGrindRates: (zone: ZoneId) => void;
-  enqueueTravel: (to: RegionId) => void;
-  enqueueGrind: (zone: ZoneId) => void;
-  enqueueGather: (zone: ZoneId) => void;
-  enqueueCraft: (recipeId: string, count: number) => void;
+  requestGrindRates: (charId: WorldCharId, zone: ZoneId) => void;
+  enqueueTravel: (charId: WorldCharId, to: RegionId) => void;
+  enqueueGrind: (charId: WorldCharId, zone: ZoneId) => void;
+  enqueueGather: (charId: WorldCharId, zone: ZoneId) => void;
+  enqueueCraft: (charId: WorldCharId, recipeId: string, count: number) => void;
+  /** Task ids are unique roster-wide, so cancelling needs no character. */
   cancelTask: (id: string) => void;
   tickWorld: () => void;
   catchUp: () => void;
@@ -484,6 +492,75 @@ const uid = (): string =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `t${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+
+/** Fresh world presence: everyone idle at the starting region. */
+function emptyCharWorlds(): Record<WorldCharId, CharWorld> {
+  return {
+    mage: { region: 'heartfield', queue: [] },
+    warrior: { region: 'heartfield', queue: [] },
+    priest: { region: 'heartfield', queue: [] },
+  };
+}
+
+/**
+ * The one uniform per-character build selector (the asymmetry phase 4 promised
+ * to hide but never actually did): Elara is the legacy top-level fields,
+ * recruits are `RosterBuild`s with no behavior/talents/xp of their own — they
+ * get the class defaults and the level cap, exactly as `pullEncounter` builds
+ * them. Slice 6 replaces this with a real `characters{}` record.
+ */
+function charBuild(
+  s: Pick<Store, 'stance' | 'behavior' | 'gear' | 'xp' | 'talents' | 'roster'>,
+  charId: WorldCharId,
+): {
+  stance: StanceConfig;
+  behavior: BehaviorOverrides;
+  gear: GearSelection;
+  level: number;
+  talents: string[];
+} {
+  if (charId === 'mage') {
+    return {
+      stance: s.stance,
+      behavior: s.behavior,
+      gear: s.gear,
+      level: levelForXp(s.xp),
+      talents: s.talents,
+    };
+  }
+  const build = s.roster[charId];
+  return {
+    stance: build.stance,
+    behavior: { ...DEFAULT_BEHAVIOR },
+    gear: build.gear,
+    level: 10,
+    talents: [],
+  };
+}
+
+/** Stable empty talent list — recruits have no tree until phase-5 slice 6. */
+const NO_TALENTS: string[] = [];
+
+/**
+ * React-side twin of `charBuild`. Each field is selected separately so every
+ * subscription returns a stable reference (a store object, a module constant
+ * or a primitive) — selecting the whole build object would allocate a fresh
+ * one per render and thrash.
+ */
+export function useCharBuild(charId: WorldCharId): {
+  stance: StanceConfig;
+  behavior: BehaviorOverrides;
+  gear: GearSelection;
+  level: number;
+  talents: string[];
+} {
+  const stance = useStore((s) => (charId === 'mage' ? s.stance : s.roster[charId].stance));
+  const gear = useStore((s) => (charId === 'mage' ? s.gear : s.roster[charId].gear));
+  const behavior = useStore((s) => (charId === 'mage' ? s.behavior : DEFAULT_BEHAVIOR));
+  const talents = useStore((s) => (charId === 'mage' ? s.talents : NO_TALENTS));
+  const level = useStore((s) => (charId === 'mage' ? levelForXp(s.xp) : 10));
+  return { stance, gear, behavior, talents, level };
+}
 
 /** The region the character will be in once all currently-queued travel resolves. */
 function projectedRegion(queue: Task[], region: RegionId): RegionId {
@@ -1006,7 +1083,9 @@ export const useStore = create<Store>()(
             }
             return { materials, buildings: { ...s.buildings, [id]: (s.buildings[id] ?? 0) + 1 } };
           }),
-        queue: [],
+        chars: emptyCharWorlds(),
+        activeWorldChar: 'mage',
+        setActiveWorldChar: (c) => set({ activeWorldChar: c }),
         lastSeenWall: Date.now(),
         multiplier: DEFAULT_MULTIPLIER,
         setMultiplier: (m) => set({ multiplier: m }),
@@ -1014,57 +1093,72 @@ export const useStore = create<Store>()(
         dismissAwaySummary: () => set({ awaySummary: null }),
 
         rateCache: {},
-        requestGrindRates: (zone) => {
-          const { gear, stance, behavior, xp, talents, rateCache } = get();
-          const level = levelForXp(xp);
-          const key = rateKey(zone, level, gear, stance, behavior, talents);
+        requestGrindRates: (charId, zone) => {
+          const { rateCache } = get();
+          const b = charBuild(get(), charId);
+          const key = rateKey(charId, zone, b.level, b.gear, b.stance, b.behavior, b.talents);
           if (rateCache[key] || inFlightGrind.has(key)) return;
           const id = nextId++;
           pendingGrindKey.set(id, key);
           inFlightGrind.add(key);
-          const req: GrindRequest = { zone, stance, behavior, gear, level, talents, iterations: 300, baseSeed: SIM_BASE_SEED };
+          const req: GrindRequest = {
+            zone,
+            charId,
+            stance: b.stance,
+            behavior: b.behavior,
+            gear: b.gear,
+            level: b.level,
+            talents: b.talents,
+            iterations: 300,
+            baseSeed: SIM_BASE_SEED,
+          };
           post({ kind: 'grind', id, req });
         },
 
-        enqueueTravel: (to) =>
+        enqueueTravel: (charId, to) =>
           set((s) => {
-            if (projectedRegion(s.queue, s.region) === to) return {};
-            const task: TravelTask = { id: uid(), kind: 'travel', to, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 };
-            return { queue: [...s.queue, task] };
+            const cw = s.chars[charId];
+            if (projectedRegion(cw.queue, cw.region) === to) return {};
+            const task: TravelTask = { id: uid(), charId, kind: 'travel', to, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 };
+            return { chars: { ...s.chars, [charId]: { ...cw, queue: [...cw.queue, task] } } };
           }),
 
-        enqueueGrind: (zone) => {
-          const { gear, stance, behavior, xp, talents, rateCache, queue, region } = get();
-          const level = levelForXp(xp);
-          const rate = rateCache[rateKey(zone, level, gear, stance, behavior, talents)];
+        enqueueGrind: (charId, zone) => {
+          const s = get();
+          const b = charBuild(s, charId);
+          const rate = s.rateCache[rateKey(charId, zone, b.level, b.gear, b.stance, b.behavior, b.talents)];
           if (!rate) return; // card keeps the button disabled until the rate is known
-          const next = [...queue];
-          if (projectedRegion(next, region) !== zone) {
-            next.push({ id: uid(), kind: 'travel', to: zone, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 });
+          const cw = s.chars[charId];
+          const next = [...cw.queue];
+          if (projectedRegion(next, cw.region) !== zone) {
+            next.push({ id: uid(), charId, kind: 'travel', to: zone, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 });
           }
           const grind: GrindTask = {
             id: uid(),
+            charId,
             kind: 'grind',
             zone,
             durationGameMs: GRIND_BLOCK_GAME_MS,
             accruedGameMs: 0,
             xpPerHour: rate.xpPerHour,
             deathsPerHour: rate.deathsPerHour,
-            levelAtEnqueue: level,
+            levelAtEnqueue: b.level,
           };
-          set({ queue: [...next, grind] });
+          set({ chars: { ...s.chars, [charId]: { ...cw, queue: [...next, grind] } } });
         },
 
-        enqueueGather: (zone) =>
+        enqueueGather: (charId, zone) =>
           set((s) => {
             const meta = REGIONS.find((r) => r.id === zone)?.gather;
             if (!meta) return {};
-            const next = [...s.queue];
-            if (projectedRegion(next, s.region) !== zone) {
-              next.push({ id: uid(), kind: 'travel', to: zone, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 });
+            const cw = s.chars[charId];
+            const next = [...cw.queue];
+            if (projectedRegion(next, cw.region) !== zone) {
+              next.push({ id: uid(), charId, kind: 'travel', to: zone, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 });
             }
             const gather: GatherTask = {
               id: uid(),
+              charId,
               kind: 'gather',
               zone,
               material: meta.material,
@@ -1072,7 +1166,7 @@ export const useStore = create<Store>()(
               durationGameMs: GATHER_BLOCK_GAME_MS,
               accruedGameMs: 0,
             };
-            return { queue: [...next, gather] };
+            return { chars: { ...s.chars, [charId]: { ...cw, queue: [...next, gather] } } };
           }),
 
         // Crafting runs anywhere; the workshop never gates, its tier only
@@ -1080,7 +1174,7 @@ export const useStore = create<Store>()(
         // precedent). Herbs for ALL units are paid at enqueue. The cap guard
         // ignores other queued crafts of the same recipe — the reducer's
         // lose-overflow rule covers that hole.
-        enqueueCraft: (recipeId, count) =>
+        enqueueCraft: (charId, recipeId, count) =>
           set((s) => {
             const recipe = RECIPES_BY_ID[recipeId];
             if (!recipe || count < 1 || !Number.isInteger(count)) return {};
@@ -1094,6 +1188,7 @@ export const useStore = create<Store>()(
             const unitGameMs = Math.round(recipe.unitGameMs * craftTimeMult(s.buildings));
             const craft: CraftTask = {
               id: uid(),
+              charId,
               kind: 'craft',
               recipeId,
               count,
@@ -1102,14 +1197,22 @@ export const useStore = create<Store>()(
               durationGameMs: unitGameMs * count,
               accruedGameMs: 0,
             };
-            return { materials, queue: [...s.queue, craft] };
+            const cw = s.chars[charId];
+            return { materials, chars: { ...s.chars, [charId]: { ...cw, queue: [...cw.queue, craft] } } };
           }),
 
         cancelTask: (id) =>
           set((s) => {
-            const t = s.queue.find((task) => task.id === id);
-            if (!t) return {};
-            const queue = s.queue.filter((task) => task.id !== id);
+            // Task ids are unique across the roster, so a plain scan finds the
+            // owner — callers don't have to know whose queue it sits in.
+            const owner = WORLD_CHARS.find((c) => s.chars[c].queue.some((task) => task.id === id));
+            if (!owner) return {};
+            const cw = s.chars[owner];
+            const t = cw.queue.find((task) => task.id === id)!;
+            const chars = {
+              ...s.chars,
+              [owner]: { ...cw, queue: cw.queue.filter((task) => task.id !== id) },
+            };
             // Cancelling a craft refunds herbs for units not yet started;
             // the in-progress unit's herbs are lost, produced units stay.
             if (t.kind === 'craft') {
@@ -1128,10 +1231,10 @@ export const useStore = create<Store>()(
                     cur + per * refundUnits,
                   );
                 }
-                return { queue, materials };
+                return { chars, materials };
               }
             }
-            return { queue };
+            return { chars };
           }),
 
         tickWorld: () =>
@@ -1139,8 +1242,8 @@ export const useStore = create<Store>()(
             const now = Date.now();
             const elapsedGameMs = Math.max(0, (now - s.lastSeenWall) * s.multiplier);
             if (elapsedGameMs <= 0) return { lastSeenWall: now };
-            const { next } = advanceWorld(s, elapsedGameMs);
-            return { ...next, lastSeenWall: now };
+            const { shared, chars } = advanceAll(s, s.chars, elapsedGameMs);
+            return { ...shared, chars, lastSeenWall: now };
           }),
 
         // Reconcile the wall-time the app was closed, once per load, via the
@@ -1156,8 +1259,13 @@ export const useStore = create<Store>()(
             MAX_CATCHUP_GAME_MS,
             Math.max(0, (now - s.lastSeenWall) * s.multiplier),
           );
-          const { next, events } = advanceWorld(s, elapsedGameMs);
-          set({ ...next, lastSeenWall: now, awaySummary: events.length ? { events, elapsedGameMs } : null });
+          const { shared, chars, events } = advanceAll(s, s.chars, elapsedGameMs);
+          set({
+            ...shared,
+            chars,
+            lastSeenWall: now,
+            awaySummary: events.length ? { events, elapsedGameMs } : null,
+          });
         },
 
         recordBossKill: (boss) =>
@@ -1183,7 +1291,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 8,
+      version: 9,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
@@ -1198,13 +1306,12 @@ export const useStore = create<Store>()(
         familiarity: s.familiarity,
         plans: s.plans,
         xp: s.xp,
-        region: s.region,
         unlocks: s.unlocks,
         materials: s.materials,
         inventory: s.inventory,
         buildings: s.buildings,
         attempts: s.attempts,
-        queue: s.queue,
+        chars: s.chars,
         lastSeenWall: s.lastSeenWall,
         multiplier: s.multiplier,
       }),
@@ -1259,6 +1366,29 @@ export const useStore = create<Store>()(
           ...l,
           consumables: sanitizeConsumableSelection(l.consumables ?? []),
         }));
+        // (v9, phase-5 slice 1: per-character world presence joins
+        // unconditionally.) The pre-v9 save had ONE queue and ONE position —
+        // both were Elara's, so they migrate onto her verbatim (hard law: a
+        // live save loses nothing) and the recruits start idle beside her.
+        {
+          const legacy = persisted as { queue?: Task[]; region?: RegionId };
+          if (!s.chars) {
+            const start = legacy.region ?? 'heartfield';
+            s.chars = {
+              mage: { region: start, queue: (legacy.queue ?? []).map((t) => ({ ...t, charId: 'mage' })) },
+              warrior: { region: start, queue: [] },
+              priest: { region: start, queue: [] },
+            };
+          }
+          // Repair: every character present, every task owned.
+          const chars = s.chars;
+          for (const id of WORLD_CHARS) {
+            const cw = chars[id];
+            chars[id] = cw
+              ? { region: cw.region ?? 'heartfield', queue: (cw.queue ?? []).map((t) => ({ ...t, charId: id })) }
+              : { region: 'heartfield', queue: [] };
+          }
+        }
         return s;
       },
     },

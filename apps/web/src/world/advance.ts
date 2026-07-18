@@ -1,5 +1,12 @@
 import { bankCapacity } from './base';
-import type { AwayEvent, Task, WorldSlice } from './types';
+import {
+  WORLD_CHARS,
+  type AwayEvent,
+  type CharWorld,
+  type Task,
+  type WorldCharId,
+  type WorldSlice,
+} from './types';
 
 /**
  * The world clock as a PURE reducer — the open-world analogue of
@@ -97,4 +104,67 @@ export function advanceWorld(
   }
 
   return { next: { xp, region, materials, inventory, buildings: s.buildings, queue }, events };
+}
+
+/** The shared pools every character's queue draws on / deposits into. */
+export interface SharedSlice {
+  xp: number;
+  materials: WorldSlice['materials'];
+  inventory: WorldSlice['inventory'];
+  buildings: WorldSlice['buildings'];
+}
+
+/**
+ * Fold the SAME `elapsedGameMs` through every character's queue — the parallel
+ * world clock (GDD §2 "division of labor", §5 task queues).
+ *
+ * Each character owns their position + queue; the bank (materials, inventory)
+ * is shared, so characters are folded in the fixed `WORLD_CHARS` order and the
+ * shared pools are threaded from one to the next. That order is what keeps the
+ * capacity clamp deterministic when two characters gather into a full bank in
+ * the same step — without it, live ticks and offline catch-up could disagree.
+ *
+ * Still pure: the live tick (many tiny steps) and catch-up (one big step)
+ * share this function, exactly as they shared `advanceWorld` before.
+ *
+ * v1 simplification: XP credits Elara only. Recruits arrive at the level cap
+ * (10 = MAX), so grind XP is meaningless for them — crediting the shared pool
+ * for their kills would silently inflate Elara's level instead.
+ */
+export function advanceAll(
+  shared: SharedSlice,
+  chars: Record<WorldCharId, CharWorld>,
+  elapsedGameMs: number,
+): { shared: SharedSlice; chars: Record<WorldCharId, CharWorld>; events: AwayEvent[] } {
+  let acc = { ...shared };
+  const nextChars = { ...chars };
+  const events: AwayEvent[] = [];
+
+  for (const charId of WORLD_CHARS) {
+    const cw = chars[charId];
+    if (!cw || cw.queue.length === 0) continue;
+    const xpBefore = acc.xp;
+    const { next, events: evs } = advanceWorld(
+      {
+        xp: acc.xp,
+        region: cw.region,
+        materials: acc.materials,
+        inventory: acc.inventory,
+        buildings: acc.buildings,
+        queue: cw.queue,
+      },
+      elapsedGameMs,
+    );
+    acc = {
+      // Only Elara banks XP (see above); recruits are capped.
+      xp: charId === 'mage' ? next.xp : xpBefore,
+      materials: next.materials,
+      inventory: next.inventory,
+      buildings: acc.buildings,
+    };
+    nextChars[charId] = { region: next.region, queue: next.queue };
+    for (const e of evs) events.push({ ...e, charId });
+  }
+
+  return { shared: acc, chars: nextChars, events };
 }

@@ -1,5 +1,5 @@
-import { ZONES, levelForXp } from '@rpg/engine';
-import { useStore } from '../store';
+import { ZONES } from '@rpg/engine';
+import { useCharBuild, useStore } from '../store';
 import { MATERIAL_LABELS } from '../world/professions';
 import { BRIDGE_COST, rateKey, regionUnlocked, type RegionMeta } from '../world/tasks';
 
@@ -10,12 +10,11 @@ const RISK_CHIP: Record<string, string> = {
 };
 
 export function RegionCard({ region }: { region: RegionMeta }) {
-  const xp = useStore((s) => s.xp);
-  const gear = useStore((s) => s.gear);
-  const stance = useStore((s) => s.stance);
-  const behavior = useStore((s) => s.behavior);
-  const talents = useStore((s) => s.talents);
-  const here = useStore((s) => s.region);
+  // Everything build-shaped is read for the ACTING character — each hero
+  // farms with their own kit, so the XP/hr and risk chips are theirs.
+  const charId = useStore((s) => s.activeWorldChar);
+  const build = useCharBuild(charId);
+  const here = useStore((s) => s.chars[s.activeWorldChar].region);
   const unlocks = useStore((s) => s.unlocks);
   const materials = useStore((s) => s.materials);
   const rateCache = useStore((s) => s.rateCache);
@@ -25,10 +24,10 @@ export function RegionCard({ region }: { region: RegionMeta }) {
   const buildBridge = useStore((s) => s.buildBridge);
   const pull = useStore((s) => s.pull);
 
-  const level = levelForXp(xp);
   const unlocked = regionUnlocked(region.id, unlocks);
   const band = ZONES[region.id]!().mobs[0]!.levelBand;
-  const rate = rateCache[rateKey(region.id, level, gear, stance, behavior, talents)];
+  const rate =
+    rateCache[rateKey(charId, region.id, build.level, build.gear, build.stance, build.behavior, build.talents)];
   const isHere = here === region.id;
 
   // Bridge (Ashen gate): buildable from anywhere once enough timber is banked.
@@ -69,14 +68,14 @@ export function RegionCard({ region }: { region: RegionMeta }) {
       <div className="region-actions">
         {unlocked && (
           <>
-            <button className="btn btn-small" disabled={isHere} onClick={() => enqueueTravel(region.id)}>
+            <button className="btn btn-small" disabled={isHere} onClick={() => enqueueTravel(charId, region.id)}>
               {isHere ? 'You are here' : 'Travel here'}
             </button>
-            <button className="btn btn-small btn-primary" disabled={!rate} onClick={() => enqueueGrind(region.id)}>
+            <button className="btn btn-small btn-primary" disabled={!rate} onClick={() => enqueueGrind(charId, region.id)}>
               Send to grind
             </button>
             {region.gather && (
-              <button className="btn btn-small" onClick={() => enqueueGather(region.id)}>
+              <button className="btn btn-small" onClick={() => enqueueGather(charId, region.id)}>
                 Gather {MATERIAL_LABELS[region.gather.material]}
               </button>
             )}

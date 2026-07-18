@@ -43,6 +43,8 @@ export type TaskKind = 'travel' | 'grind' | 'gather' | 'craft';
 
 interface BaseTask {
   id: string;
+  /** Whose queue this belongs to — queues run in parallel (phase-5 slice 1). */
+  charId: WorldCharId;
   kind: TaskKind;
   /** Total game-ms this task needs. */
   durationGameMs: number;
@@ -88,10 +90,36 @@ export interface CraftTask extends BaseTask {
 
 export type Task = TravelTask | GrindTask | GatherTask | CraftTask;
 
+/**
+ * Characters with a presence in the world (GDD §2 "division of labor", §5
+ * task queues): each has their own position and their own queue, and the
+ * queues run in PARALLEL. Keyed by the engine class id so it lines up with
+ * `familiarity` and `PlanAction.charId` (`RosterCharId` can't be used — it
+ * deliberately excludes Elara, who predates the roster record).
+ */
+export type WorldCharId = 'mage' | 'warrior' | 'priest';
+
+/** Fixed fold order — keeps the shared-bank capacity clamp deterministic. */
+export const WORLD_CHARS: readonly WorldCharId[] = ['mage', 'warrior', 'priest'];
+
+export const WORLD_CHAR_NAMES: Record<WorldCharId, string> = {
+  mage: 'Elara',
+  warrior: 'Borin',
+  priest: 'Seren',
+};
+
+/** One character's world presence: where they are and what they're doing. */
+export interface CharWorld {
+  region: RegionId;
+  queue: Task[];
+}
+
 // ---- offline catch-up summary ----
 
 export interface AwayEvent {
   kind: TaskKind;
+  /** Who did it (absent on pre-v9 events replayed from an old summary). */
+  charId?: WorldCharId;
   zone?: ZoneId;
   to?: RegionId;
   xpGained?: number;

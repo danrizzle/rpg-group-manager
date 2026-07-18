@@ -1,6 +1,6 @@
 import type { StanceConfig } from '@rpg/engine';
 import type { BehaviorOverrides, GearSelection } from '../store';
-import type { Materials, RegionId, Unlocks } from './types';
+import type { Materials, RegionId, Unlocks, WorldCharId } from './types';
 import { HERB_RATE_PER_HOUR } from './professions';
 
 /**
@@ -115,7 +115,13 @@ export function buildHash(
   return `${hashGear(g)}::${hashStance(s)}::${hashBehavior(b)}::${talents.join(',')}`;
 }
 
+/**
+ * Rate-cache key. The class id leads because each character grinds with their
+ * own kit — Borin and Elara in identical gear are still different rates, and
+ * without the discriminator their cache entries would collide.
+ */
 export function rateKey(
+  charId: WorldCharId,
   zone: RegionId,
   level: number,
   g: GearSelection,
@@ -123,5 +129,5 @@ export function rateKey(
   b: BehaviorOverrides,
   talents: string[],
 ): string {
-  return `${zone}|${level}|${buildHash(g, s, b, talents)}`;
+  return `${charId}|${zone}|${level}|${buildHash(g, s, b, talents)}`;
 }

@@ -19,6 +19,8 @@ export function AlchemyPanel() {
   const inventory = useStore((s) => s.inventory);
   const buildings = useStore((s) => s.buildings);
   const enqueueCraft = useStore((s) => s.enqueueCraft);
+  // Crafting runs anywhere, so it goes on the acting character's queue.
+  const charId = useStore((s) => s.activeWorldChar);
   const cap = bankCapacity(buildings);
   const mult = craftTimeMult(buildings);
 
@@ -54,7 +56,7 @@ export function AlchemyPanel() {
                     ? 'bank full'
                     : `${herbCostText(r)} each · ${Math.round((r.unitGameMs * mult) / 60_000) * count} game-min`
                 }
-                onClick={() => enqueueCraft(r.id, count)}
+                onClick={() => enqueueCraft(charId, r.id, count)}
               >
                 Craft ×{count}
               </button>
