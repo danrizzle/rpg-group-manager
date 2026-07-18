@@ -23,7 +23,7 @@ import { makeWarrior } from '../src/content/classes/warrior';
 import { makePriest } from '../src/content/classes/priest';
 import { applyComp } from '../src/model/comp';
 import { COMP_PASSIVES, GROUP_CDS } from '../src/content/groupCds';
-import { makeEmberForge } from '../src/content/dungeons/emberForge';
+import { makeEmberForge, makeSlagmaw, makeVulkan } from '../src/content/dungeons/emberForge';
 import { encounterById } from '../src/model/dungeon';
 import { TALENT_BUILDS } from '../src/content/classes/mageTalents';
 import { ZONES } from '../src/content/mobs/zones';
@@ -250,14 +250,122 @@ if (encounterName) {
   process.exit(0);
 }
 
-// ---- Boss report (default) -------------------------------------------------
-
+const bossName = strArg('boss', 'cinder-maw');
 const BOSSES: Record<string, (o?: Partial<BossDefinition>) => BossDefinition> = {
   'cinder-maw': makeCinderMaw,
   'bandit-warlord': makeBanditWarlord,
   emberwing: makeEmberwing,
+  slagmaw: makeSlagmaw,
+  vulkan: makeVulkan,
 };
-const bossName = strArg('boss', 'cinder-maw');
+
+// ---- Raid tuning mode (--raid: canonical 2 tanks / 3 healers / 5 dps) -------
+// Additive dev harness: the only 10-man path (the --encounter path is a fixed
+// trinity). Party knobs mirror --encounter: --pgear/--pdisc/--pcons; the boss
+// is --boss with the usual --hp/--enrage overrides (existing bosses are 3-char
+// tuned, so scale hp/enrage for a real 10-man check).
+if (flag('raid')) {
+  const tier = strArg('pgear', 'default');
+  const gearFor = (cls: string) => {
+    const key = cls === 'mage' ? tier : `${cls}-${tier}`;
+    const g = GEAR_SETS[key];
+    if (!g) throw new Error(`no gear set '${key}'`);
+    return g;
+  };
+  const pdisc = arg('pdisc', 50);
+  const pconsArg = strArg('pcons', '');
+  const pcons =
+    pconsArg === '' || pconsArg === 'none'
+      ? []
+      : pconsArg.split(',').map((s) => {
+          const c = CONSUMABLES_BY_ID[s.trim()];
+          if (!c) throw new Error(`unknown consumable '${s.trim()}'`);
+          return c;
+        });
+  const raw = [
+    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, pcons),
+    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pcons),
+    ...Array.from({ length: 5 }, () => makeMage({ discipline: pdisc }, gearFor('mage'), 10, talents, pcons)),
+  ];
+  // makeX hardcodes one id per class — give every member a unique id (tanks
+  // first) BEFORE applyComp / the Fight, else the constructor throws on dupes.
+  const idCounts: Record<string, number> = {};
+  const ided = raw.map((c) => {
+    const k = c.classId!;
+    idCounts[k] = (idCounts[k] ?? 0) + 1;
+    return { ...c, id: `${k}${idCounts[k]}` };
+  });
+  const defs = applyComp(ided, GROUP_CDS, COMP_PASSIVES);
+  const party = defs.map((character) => ({ character, stance: { ...stance } }));
+  const makeRaidBoss = BOSSES[bossName];
+  if (!makeRaidBoss) throw new Error(`unknown boss '${bossName}' (${Object.keys(BOSSES).join('/')})`);
+  const boss = makeRaidBoss({
+    ...(arg('hp', 0) > 0 ? { hp: arg('hp', 0) } : {}),
+    ...(arg('enrage', 0) > 0 ? { enrageAtMs: arg('enrage', 0) * 1000 } : {}),
+  });
+
+  const started = performance.now();
+  const result = runMonteCarlo({ party, boss }, n, seed);
+  const elapsed = performance.now() - started;
+
+  const charAgg = new Map<string, { name: string; role: string; dps: number; hps: number; taken: number; deaths: number }>();
+  for (const r of result.runs) {
+    for (const [id, c] of Object.entries(r.perCharacter ?? {})) {
+      const agg = charAgg.get(id) ?? { name: c.name, role: c.role ?? '', dps: 0, hps: 0, taken: 0, deaths: 0 };
+      agg.dps += c.dps;
+      agg.hps += c.hps;
+      agg.taken += c.damageTaken;
+      agg.deaths += c.died ? 1 : 0;
+      charAgg.set(id, agg);
+    }
+  }
+
+  if (flag('json')) {
+    const { runs, ...aggregate } = result;
+    const perCharacter = Object.fromEntries(
+      [...charAgg.entries()].map(([id, a]) => [
+        id,
+        { name: a.name, role: a.role, dps: a.dps / n, hps: a.hps / n, damageTaken: a.taken / n, deathRate: a.deaths / n },
+      ]),
+    );
+    console.log(JSON.stringify({ raid: '2t/3h/5d', boss: boss.id, ...aggregate, perCharacter }, null, 2));
+    process.exit(0);
+  }
+
+  console.log(`\n${boss.name} — raid 2t/3h/5d (10), ${n} runs, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
+  console.log(
+    `  party gear ${tier}  discipline ${pdisc}  consumables ${pcons.length ? pcons.map((c) => c.id).join(',') : 'none'}  hp ${boss.hp}  enrage ${mmss(boss.enrageAtMs)}`,
+  );
+  console.log(`\n  Kill rate:      ${pct(result.killRate)}`);
+  for (const [kind, count] of sortDesc(result.lossBreakdown as Record<string, number>)) {
+    console.log(`    lost to ${kind}: ${pct(count / n)}`);
+  }
+  if (result.timeToKillMs.mean > 0) {
+    const t = result.timeToKillMs;
+    console.log(`  Time to kill:   ${mmss(t.mean)} ± ${mmss(t.stddev)}   (p10 ${mmss(t.p10)}, p90 ${mmss(t.p90)})`);
+  }
+  console.log(`  Party DPS:      ${result.dps.mean.toFixed(0)} ± ${result.dps.stddev.toFixed(0)}`);
+  console.log(`\n  Per character (avg/run):`);
+  for (const [id, a] of charAgg) {
+    console.log(
+      `    ${a.name.padEnd(8)} (${id.padEnd(8)} ${a.role.padEnd(6)})  dps ${(a.dps / n).toFixed(0).padStart(4)}  hps ${(a.hps / n).toFixed(0).padStart(4)}  taken ${(a.taken / n).toFixed(0).padStart(6)}  died ${pct(a.deaths / n)}`,
+    );
+  }
+  if (Object.keys(result.deathCauses).length > 0) {
+    console.log(`  Death causes:`);
+    for (const [cause, count] of sortDesc(result.deathCauses).slice(0, 5)) {
+      console.log(`    ${cause}: ${count}`);
+    }
+  }
+  console.log();
+  process.exit(0);
+}
+
+// ---- Boss report (default) -------------------------------------------------
+
 const makeBoss = BOSSES[bossName];
 if (!makeBoss) throw new Error(`unknown boss '${bossName}' (${Object.keys(BOSSES).join('/')})`);
 

@@ -4,10 +4,12 @@
 
 **Phase 4 (Group content) COMPLETE — all 6 slices done (party sim, trinity +
 Ember Forge, roster/dungeon web, boss journal, boss plans, live calls).**
-Phase 5 (roster & raids) is under way on a **7-slice plan**: slice 1
-(per-character task queues) has **landed** — reordered to the front after play
-showed the recruits had no world presence. Next is slice 2 (raid-scale party,
-engine); the raid-side design questions (raid size, slot schedule, lockouts,
+Phase 5 (roster & raids) is under way on a **7-slice plan**: slices 1
+(per-character task queues) and 2 (raid-scale party, engine) have **landed** —
+`MAX_PARTY_SIZE` is now a hard 10 and the four size cliffs (group-heal breadth,
+healer threat, movement fire, healer-AI dilution) are fixed, all byte-identical
+below raid scale. Next is slice 3 (mechanics-as-a-list refactor + boss-applied
+debuffs). The remaining raid-side design questions (slot schedule, lockouts,
 loot) are still open and bind from there on. As of July 2026.
 
 ## Phase checklist
@@ -409,22 +411,45 @@ loot) are still open and bind from there on. As of July 2026.
         talent trees make it meaningful; and nothing interlocks world tasks
         with dungeon pulls — you can pull while heroes are mid-travel, which
         matches the pre-existing behaviour that pulls never checked location.
-  - [ ] **Slice 2 — Raid-scale party (engine).** `MAX_PARTY_SIZE` 5 → **10**
-        (raids are 10-man — see the resolved design question below;
-        `sim/engine.ts`, and the ceiling test in `test/party.test.ts` asserts a
-        6-member party throws, so it must move to 11 — this is not a bare
-        constant bump). The constant is trivial; the *tuning coupling* is the
-        slice, and 10-man softens every cliff without removing any of them.
-        Tune against the canonical **2 tanks / 3 healers / 5 dps** comp:
-        effect `target: 'party'` returns every living char, so a group heal
-        balanced for 3 becomes 3.3× throughput — still needs a bounded variant
-        (`{kind:'group'; maxTargets}`); heal threat feeds EVERY living enemy
-        at 0.5×, so 3 healers still out-threat the tanks; per-character
-        movement-fail rolls make "someone stands in fire" likely rather than
-        certain at 10 (needs a fails-≥N tolerance); and the healer AI averages
-        deficit over all allies (`sim/decision.ts`), so a dying tank is
-        diluted in a 10-pool average — role-weight it. Byte-identity for every
-        solo + 3-char stream. No web work.
+  - [x] **Slice 2 — Raid-scale party (engine). ← LANDED.**
+        `MAX_PARTY_SIZE` 5 → **10** (raids are 10-man); the ceiling test moved
+        6→**11**. The constant is trivial; the *tuning coupling* was the slice —
+        10-man softens every cliff without removing any, so each got a fix
+        shaped to reduce to today's behavior at ≤5 (byte-identity). Tuned
+        against the canonical **2 tanks / 3 healers / 5 dps** comp.
+        **Landed:**
+        1. **Bounded group heal.** New `HealEffect.target`
+           `{kind:'group';maxTargets}` (`model/ability.ts`); a shared pure
+           `selectGroupIndices` (`sim/decision.ts`) picks the maxTargets
+           most-hurt living (tanks role-weighted in), emitted in **party
+           order**, and is used by both `healTargets` (resolution) and the
+           decision scoring (so score and heal never diverge). At ≤ maxTargets
+           living it returns every member in party order = the old whole-party
+           heal. Priest `circle-of-healing` + `divine-hymn` → `maxTargets 5`.
+        2. **Heal-threat clamp** (`pickTarget`): size-gated — for parties **> 5**
+           only, a non-tank's effective threat on an enemy is capped at the top
+           living tank's threat there (0 ⇒ uncapped, so fresh-add aggro drama
+           survives). Never runs for any ≤5 party ⇒ existing streams unchanged
+           by construction. Rejected a read-time cap keyed on tank threat (t=0
+           zero-cap flips the trinity's early stray healer-swing) and lowering
+           `HEAL_THREAT_COEFF` (can delete a stray swing in one MC seed).
+        3. **Movement fail tolerance.** Optional `movementWindows.maxSafeFails`
+           (`model/boss.ts`); `bossScript` rolls every char first (unchanged RNG
+           order) then punishes only failures **beyond** the tolerance. Absent =
+           0 = every failure punished (byte-identical). No existing boss sets it.
+        4. **Healer-AI role weight.** `AllyView.role`; role folds only into the
+           group-heal **subset selection**, not `lowest-ally`, not the score
+           magnitude — a pure no-op when all fit (trinity).
+        CLI: additive **`--raid`** tuning mode assembles the 2/3/5 comp
+        (unique ids remapped past `makeX`'s hardcoded id, tanks first) — the
+        only 10-man path; `--encounter` trinity path untouched.
+        **6 new tests** (10-man runs; 2 tanks hold vs 3 healers; group heal ≤5
+        & binds at 10; raid determinism; per-character RNG independence; fail
+        tolerance) → **132 green**. **Byte-identity verified**: all 7 solo + 3
+        trinity `--json` baselines AND full trinity event streams (5 seeds ×
+        3 encounters) diff-identical before/after; Ember Forge holds its Law-2
+        numbers (Slagmaw 97.5%, Vulkan 96.25% at `--n 400`). Web untouched
+        (typecheck + build clean). Balance below.
   - [ ] **Slice 3 — Mechanics as a list + boss-applied debuffs + enemy cast
         windows (engine).** `BossDefinition` is today a flat record of
         singleton mandatory fields (one `movementWindows`, one `addPhase` —
@@ -557,6 +582,44 @@ loot) are still open and bind from there on. As of July 2026.
   on it") and makes the crafter a real role per GDD §2. Rejected: a queue-less
   global craft lane (a second scheduling concept for one task kind).
 
+**Slice 2 (raid-scale party):**
+
+- **Every cliff fix is a no-op below raid scale, not a recalibration.** The
+  hard law is byte-identity for the 7 solo + 3 trinity streams, and the four
+  fixes touch code those streams exercise. Rather than retune and hope the
+  aggregate lands, each fix is structured to reduce EXACTLY to today's
+  behavior at ≤5 chars / ≤ maxTargets living, then verified by diffing full
+  event streams (not just `--json` aggregates) across 5 seeds × 3 encounters.
+  Rejected: tuning the numbers and accepting "close enough" — a single flipped
+  melee target in one of 2000 seeds is a broken stream.
+- **Heal-threat fix is a size gate (`chars.length > 5`), not a threat cap.**
+  A read-time cap keyed on tank threat looked cleaner but is unsafe: at t=0 the
+  top tank threat is 0, so it clamps a healer's opening heal-threat to 0 and
+  flips the trinity's documented early stray healer-swing. Lowering
+  `HEAL_THREAT_COEFF` is unsafe for the same reason (deletes a stray swing in
+  some seed). The size gate can PROVABLY never run for any existing baseline
+  (all ≤5), mirroring the "absent arg = old behavior" pattern used throughout.
+  Inside the gate, non-tanks are capped at the top living tank's threat, with
+  tanks iterated first so ties resolve to the tank. maxTargets ≥ 3 is the
+  matching invariant for the group heal.
+- **Group-heal selection and its decision score share one helper.** Two copies
+  (one to pick heal targets, one to score the ability) would drift at raid
+  scale — the brain could value a heal it won't actually cast. `selectGroupIndices`
+  is the single source; the score averages the deficit of the SUBSET it will
+  land on, which un-dilutes at raid scale and equals the old whole-party
+  average when everyone fits. Rejected: scoring on the whole raid (the
+  dilution bug the slice exists to fix).
+- **Role-weighting rides the subset selection only.** Weighting `lowest-ally`
+  or the score magnitude would change trinity decisions; weighting only WHO
+  enters the bounded subset is inert when everyone fits (≤ maxTargets), so it
+  costs zero byte-identity while still pulling a dying tank into the heal at
+  10. Tank weight 1.5 (placeholder-tunable).
+- **`--raid` is additive dev tooling, not a content boss.** There is no raid
+  boss until slice 7, so the 10-man is measured against scaled existing bosses
+  purely to confirm the mechanics (tanks hold ~5× the party's damage-taken vs
+  3 healers; group heal bounded). Rejected: authoring a placeholder raid boss
+  now (content belongs in slice 7 after the mechanics list refactor).
+
 ## Phase 5 — open design questions (GDD gaps to resolve before the raid slices)
 
 The GDD specifies phase-5 *features* but is silent on several rules the
@@ -605,11 +668,31 @@ back-filled into DESIGN.md rather than living only here.
    catalog contains no dispel call. Decide whether dispels are auto-only
    (Law 2), plan-assignable, or get a palette button.
 
+## Balance state (raid scale, phase-5 slice 2)
+
+No raid boss exists yet (slice 7), so the 10-man is measured against scaled
+existing bosses purely to confirm the mechanics behave. Canonical comp
+**2 tanks / 3 healers / 5 dps**, default gear, `--raid` CLI (seed 42):
+
+| Boss | Setup | Result | Note |
+|---|---|---|---|
+| Slagmaw | default (hp 62k) | 100%, TTK 1:01 | 10-man facerolls 3-char content (expected) |
+| Slagmaw | hp 200k, enrage off | 100%, TTK 3:20 | sustained eruption pressure — healers hold |
+
+Threat check (hp 200k run): tanks take **~15k** damage each vs **~3.9k**
+(healers) / **~3.4k** (dps) — the size-gated clamp holds the boss on the two
+tanks even against 3 healers; non-tank damage-taken is party-wide eruption,
+not melee. Group heal (`circle-of-healing`/`divine-hymn`, `maxTargets 5`)
+lands on ≤5 of the 10 per cast (tested). These are mechanic-sanity numbers,
+not a Law-2 gate — the kill-% wall arrives with slice-7 raid content.
+
 ## Balance state (Ember Forge, phase-4 slice 2)
 
-Trinity = Warrior + Priest + Mage via `applyComp` (Battle Shout at pull,
-Well-Drilled +5 discipline). `--n 400`, seed 42, CLI stance defaults
-(offense 0.6, targeting 0.5, potion <35%), no plan (slice 5 adds plans):
+**Unchanged by slice 2 — the trinity streams are byte-identical** (verified by
+full-stream diff, not just aggregates). Trinity = Warrior + Priest + Mage via
+`applyComp` (Battle Shout at pull, Well-Drilled +5 discipline). `--n 400`,
+seed 42, CLI stance defaults (offense 0.6, targeting 0.5, potion <35%), no
+plan (slice 5 adds plans):
 
 | Encounter | Setup | Kill rate | Note |
 |---|---|---|---|

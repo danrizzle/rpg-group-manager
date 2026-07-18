@@ -60,7 +60,7 @@ const KIT: Ability[] = [
     name: 'Circle of Healing',
     castTimeMs: 2500,
     cooldownMs: 12_000,
-    effect: { kind: 'heal', base: 150, coeff: 1.0, target: 'party' },
+    effect: { kind: 'heal', base: 150, coeff: 1.0, target: { kind: 'group', maxTargets: 5 } },
     tags: [],
     movementPenalty: true,
   },
@@ -69,7 +69,7 @@ const KIT: Ability[] = [
     name: 'Divine Hymn',
     castTimeMs: 0,
     cooldownMs: 180_000,
-    effect: { kind: 'heal', base: 500, coeff: 2.0, target: 'party' },
+    effect: { kind: 'heal', base: 500, coeff: 2.0, target: { kind: 'group', maxTargets: 5 } },
     tags: ['heal-cd'],
   },
   {

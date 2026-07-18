@@ -19,6 +19,16 @@ export interface DamageEffect {
   aoe?: boolean;
 }
 
+/**
+ * A raid-bounded group heal: lands on the `maxTargets` most-hurt living
+ * members (tanks weighted in) instead of the whole raid, so throughput does
+ * not scale with party size. At ≤ maxTargets living it is exactly 'party'.
+ */
+export interface GroupHealTarget {
+  kind: 'group';
+  maxTargets: number;
+}
+
 export interface HealEffect {
   kind: 'heal';
   base: number;
@@ -26,9 +36,10 @@ export interface HealEffect {
   /**
    * Who the heal lands on. Absent = 'self' (solo-era potions/self-sustain);
    * 'lowest-ally' picks the most-hurt living party member (healer bread and
-   * butter); 'party' heals every living member (group heal / heal CD).
+   * butter); 'party' heals every living member; `{kind:'group',maxTargets}`
+   * is the raid-bounded group heal (heals the maxTargets most-hurt).
    */
-  target?: 'self' | 'lowest-ally' | 'party';
+  target?: 'self' | 'lowest-ally' | 'party' | GroupHealTarget;
 }
 
 export interface BuffEffect {

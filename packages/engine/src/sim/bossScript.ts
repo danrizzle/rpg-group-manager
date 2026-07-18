@@ -61,27 +61,34 @@ export function installBoss(fight: Fight): void {
   }
 
   // Type 2b — movement windows: each character moves (DPS penalty) or gets
-  // hit (mistake). One window, one roll per living member.
+  // hit (mistake). One window, one roll per living member. At raid scale a
+  // `maxSafeFails` tolerance lets that many characters fail without being hit
+  // (the raid soaks it); absent = 0 = every failure punished (byte-identical).
   const mv = def.movementWindows;
   const window = () => {
     if (fight.ended !== null) return;
     fight.emit({ type: 'movementStart', source: BOSS_ID, meta: { durationMs: mv.durationMs } });
     const moved: typeof fight.chars = [];
+    // Roll every living member first (order + RNG draws unchanged), collecting
+    // those who failed; only failures BEYOND the tolerance are then punished.
+    const failed: typeof fight.chars = [];
     for (const c of fight.livingChars()) {
-      const failed = rollFailToMove(rng, c.def.behavior.discipline);
-      if (failed) {
-        fight.emit({ type: 'mistake', source: c.actor.id, meta: { kind: 'stayed-in-fire' } });
-        fight.scheduler.in(600, () => {
-          if (!c.actor.alive) return;
-          fight.damageChar(c, mv.failDamage * bossDamageMult(), mv.failDamageType, BOSS_ID, {
-            abilityId: 'lava-surge',
-            damageType: mv.failDamageType,
-          });
-        });
+      if (rollFailToMove(rng, c.def.behavior.discipline)) {
+        failed.push(c);
       } else {
         c.moving = true;
         moved.push(c);
       }
+    }
+    for (const c of failed.slice(mv.maxSafeFails ?? 0)) {
+      fight.emit({ type: 'mistake', source: c.actor.id, meta: { kind: 'stayed-in-fire' } });
+      fight.scheduler.in(600, () => {
+        if (!c.actor.alive) return;
+        fight.damageChar(c, mv.failDamage * bossDamageMult(), mv.failDamageType, BOSS_ID, {
+          abilityId: 'lava-surge',
+          damageType: mv.failDamageType,
+        });
+      });
     }
     fight.scheduler.in(mv.durationMs, () => {
       for (const c of moved) c.moving = false;

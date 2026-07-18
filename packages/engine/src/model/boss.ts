@@ -47,6 +47,13 @@ export interface BossDefinition {
     /** Damage taken when a character fails to move. */
     failDamage: number;
     failDamageType: DamageType;
+    /**
+     * Raid tolerance: this many characters may fail to move without being
+     * hit (the raid soaks it). Absent = 0 = every failure is punished
+     * (byte-identical to pre-raid bosses). Only failures BEYOND the tolerance
+     * take damage — the per-character fail rolls are unchanged.
+     */
+    maxSafeFails?: number;
   };
 
   /** Type 3 — add waves from a HP-triggered phase, with tantrum soft enrage. */

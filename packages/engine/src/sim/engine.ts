@@ -1,7 +1,7 @@
 import { EventLog, type CombatEvent } from '../core/events';
 import { Rng } from '../core/rng';
 import { Scheduler } from '../core/scheduler';
-import { GCD_MS, type Ability } from '../model/ability';
+import { GCD_MS, type Ability, type GroupHealTarget } from '../model/ability';
 import { Actor } from '../model/actor';
 import type { BossDefinition } from '../model/boss';
 import type { MobDefinition, MobPackDefinition } from '../model/mobPack';
@@ -10,7 +10,7 @@ import type { BossPlan, TimedCall } from '../model/plan';
 import { installPlan } from './planRunner';
 import { hasteMult, type BehaviorStats, type CombatStats } from '../model/stats';
 import { validateStance, type StanceConfig } from '../model/stance';
-import { chooseAction, shouldUseBurst, type AllyView } from './decision';
+import { chooseAction, selectGroupIndices, shouldUseBurst, type AllyView } from './decision';
 import {
   hesitationDelayMs,
   reactionTimeMs,
@@ -85,7 +85,14 @@ const MAX_FIGHT_MS = 600_000;
 const DAMAGE_VARIANCE = 0.15;
 /** Threat generated per point of effective healing (applied to every enemy). */
 const HEAL_THREAT_COEFF = 0.5;
-export const MAX_PARTY_SIZE = 5;
+/** Raids are 10-man (GDD amendment 2026-07-18) — a hard ceiling, not headroom. */
+export const MAX_PARTY_SIZE = 10;
+/**
+ * The pre-raid ceiling (old MAX_PARTY_SIZE, and the dungeon party cap). The
+ * raid-only heal-threat clamp engages only for parties LARGER than this, so
+ * every solo / trinity / ≤5 stream is untouched by construction.
+ */
+const RAID_THREAT_CLAMP_MIN_SIZE = 5;
 
 export const PLAYER_ID = 'player';
 export const BOSS_ID = 'boss';
@@ -321,9 +328,17 @@ export class Fight {
     let best: CharState | null = null;
     let bestVal = 0;
     if (table) {
+      // Raid regime only (party > 5): cap each non-tank's effective threat at
+      // the top living tank's threat on this enemy, so healers can't out-threat
+      // the tanks as their count grows. `cap === 0` (no living tank with
+      // threat) leaves everyone uncapped — fresh-add aggro drama survives. The
+      // gate never fires for any ≤5 party, so existing streams are unchanged.
+      const cap =
+        this.chars.length > RAID_THREAT_CLAMP_MIN_SIZE ? this.topTankThreat(table) : 0;
       for (const c of this.chars) {
         if (!c.actor.alive) continue;
-        const v = table.get(c.actor.id) ?? 0;
+        let v = table.get(c.actor.id) ?? 0;
+        if (cap > 0 && c.def.role !== 'tank') v = Math.min(v, cap);
         if (v > bestVal) {
           best = c;
           bestVal = v;
@@ -333,6 +348,17 @@ export class Fight {
     if (best) return best;
     if (this.lastHealer?.actor.alive) return this.lastHealer;
     return this.livingChars()[0] ?? null;
+  }
+
+  /** Highest threat on this enemy held by any living tank (0 if none). */
+  private topTankThreat(table: Map<string, number>): number {
+    let top = 0;
+    for (const c of this.chars) {
+      if (c.def.role === 'tank' && c.actor.alive) {
+        top = Math.max(top, table.get(c.actor.id) ?? 0);
+      }
+    }
+    return top;
   }
 
   // ---- Character action cycle ----------------------------------------------
@@ -362,7 +388,11 @@ export class Fight {
         char.actor.isReady(a, now),
     );
     const allies: AllyView[] | undefined = this.setup.party
-      ? this.livingChars().map((c) => ({ id: c.actor.id, hpPct: c.actor.hpPct }))
+      ? this.livingChars().map((c) => ({
+          id: c.actor.id,
+          hpPct: c.actor.hpPct,
+          ...(c.def.role ? { role: c.def.role } : {}),
+        }))
       : undefined;
     let choice = chooseAction({
       ready,
@@ -504,9 +534,22 @@ export class Fight {
     }
   }
 
-  private healTargets(char: CharState, mode: 'self' | 'lowest-ally' | 'party'): CharState[] {
+  private healTargets(
+    char: CharState,
+    mode: 'self' | 'lowest-ally' | 'party' | GroupHealTarget,
+  ): CharState[] {
     if (mode === 'self') return [char];
     const living = this.livingChars();
+    if (typeof mode === 'object') {
+      // Bounded group heal: the maxTargets most-hurt living members, emitted in
+      // party order. At ≤ maxTargets living this returns every member in party
+      // order — byte-identical to the old whole-party 'party' heal.
+      const idx = selectGroupIndices(
+        living.map((c) => ({ hpPct: c.actor.hpPct, role: c.def.role })),
+        mode.maxTargets,
+      );
+      return idx.map((i) => living[i]!);
+    }
     if (mode === 'party') return living;
     let lowest = char;
     for (const c of living) {
