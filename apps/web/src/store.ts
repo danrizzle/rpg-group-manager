@@ -1,4 +1,5 @@
 import {
+  BOSS_ID,
   COMP_PASSIVES,
   CONSUMABLES_BY_ID,
   CONSUMABLE_SLOTS,
@@ -34,7 +35,10 @@ import {
   type Item,
   type MobPackDefinition,
   type PartyMember,
+  type PlanAction,
+  type PlanTrigger,
   type StanceConfig,
+  type TimedCall,
 } from '@rpg/engine';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
@@ -333,6 +337,19 @@ export interface FightState {
   review: FightReview;
   /** The boss's attempt record BEFORE this pull — what "vs last/best" compares against. */
   compare: AttemptRecord;
+  // ---- live calls (phase-4 slice 6; party pulls only, all transient) ----
+  /** Party members (character + stance) — kept for exact call re-runs. */
+  partyMembers?: PartyMember[];
+  /** The sanitized boss plan the pull ran with — replayed on every re-run. */
+  plan?: BossPlan;
+  /** Calls issued so far, appended live and replayed deterministically. */
+  calls: TimedCall[];
+  /** Resolved consumable slots [warrior, priest, mage] — for deferred consumption. */
+  partyConsumables?: ConsumableDefinition[][];
+  /** Party pulls run live: frontier-locked playback + call palette. */
+  live?: boolean;
+  /** Guards the deferred recording so a re-render can't record twice. */
+  finalized?: boolean;
 }
 
 interface Store {
@@ -381,6 +398,12 @@ interface Store {
   dungeonCleared: Record<string, boolean>;
   pullEncounter: (encounterId: string) => void;
   recordEncounterCleared: (encounterId: string) => void;
+  /** Issue live calls (slice 6): append at the frontier + re-run deterministically. */
+  issueCall: (actions: PlanAction[]) => void;
+  /** Record a live pull's outcome once — deferred from pull time to fight end. */
+  finalizeFight: () => void;
+  /** Post-fight: convert a call into a plan entry (bossCast-anchored, else time). */
+  adoptCall: (action: PlanAction, atMs: number) => void;
   /** Boss journals (GDD §4): encounter id → discovered knowledge (persisted). */
   journal: Record<string, JournalEntry>;
   /** Familiarity: char id → boss/encounter id → attempts (persisted). */
@@ -391,9 +414,11 @@ interface Store {
 
   // --- replay playback clock ---
   playT: number;
+  /** Furthest point watched — live pulls lock the scrubber to this (slice 6). */
+  frontierMs: number;
   playing: boolean;
   speed: number;
-  setPlayback: (patch: Partial<{ playT: number; playing: boolean; speed: number }>) => void;
+  setPlayback: (patch: Partial<{ playT: number; frontierMs: number; playing: boolean; speed: number }>) => void;
 
   // --- world loop ---
   view: View;
@@ -651,10 +676,11 @@ export const useStore = create<Store>()(
             if (n > 0) nextInventory[id] = Math.max(0, (nextInventory[id] ?? 0) - n);
           }
           set({
-            fight: { result, seed, player, boss, bossId, review, compare },
+            fight: { result, seed, player, boss, bossId, review, compare, calls: [] },
             attempts: nextAttempts,
             inventory: nextInventory,
             playT: 0,
+            frontierMs: 0,
             playing: true,
             speed: 1,
             view: 'combat',
@@ -711,7 +737,7 @@ export const useStore = create<Store>()(
         pullEncounter: (encounterId) => {
           const {
             stance, behavior, gear, xp, talents, equippedConsumables,
-            roster, inventory, attempts, unlocks, dungeonCleared, journal, familiarity,
+            roster, inventory, attempts, unlocks, dungeonCleared, familiarity,
           } = get();
           if (!unlocks.cinderMawKilled) return;
           const dungeon = makeEmberForge();
@@ -777,7 +803,61 @@ export const useStore = create<Store>()(
           const result = runFight(setup);
           const review = fightReview(result, setup);
 
+          // Live pulls defer ALL recording (attempts, consumption, journal,
+          // familiarity) to `finalizeFight`, which runs from the final stream
+          // once playback reaches the natural end — issuing a live call re-runs
+          // the fight, so recording eagerly here would double-count (slice 6).
           const compare: AttemptRecord = attempts[encounterId] ?? {};
+
+          set({
+            fight: {
+              result,
+              seed,
+              party: defs,
+              ...(enc.kind === 'boss' ? { boss: enc.boss } : { pack: enc.pack }),
+              bossId: encounterId,
+              encounterId,
+              review,
+              compare,
+              partyMembers: party,
+              ...(plan?.entries.length ? { plan } : {}),
+              calls: [],
+              partyConsumables: [wCons, pCons, mCons],
+              live: true,
+              finalized: false,
+            },
+            playT: 0,
+            frontierMs: 0,
+            playing: true,
+            speed: 1,
+            view: 'combat',
+          });
+        },
+
+        issueCall: (actions) => {
+          const { fight, frontierMs } = get();
+          if (!fight || !fight.live || fight.finalized || !fight.partyMembers) return;
+          const atMs = frontierMs;
+          const appended: TimedCall[] = actions.map((action) => ({ atMs, action }));
+          const calls = [...fight.calls, ...appended];
+          // Deterministic re-run: same seed/party/plan + the appended calls.
+          // Purity guarantees every event before `atMs` is byte-identical, so
+          // the past the player already watched is untouched (plan.test.ts).
+          const setup = fight.boss
+            ? { party: fight.partyMembers, boss: fight.boss, seed: fight.seed, ...(fight.plan ? { plan: fight.plan } : {}), calls }
+            : { party: fight.partyMembers, pack: fight.pack!, seed: fight.seed, calls };
+          const result = runFight(setup);
+          const review = fightReview(result, setup);
+          set({ fight: { ...fight, result, review, calls }, playing: true });
+        },
+
+        finalizeFight: () => {
+          const { fight, attempts, inventory, journal, familiarity } = get();
+          if (!fight || !fight.live || fight.finalized) return;
+          const { result, review, compare, encounterId } = fight;
+          const key = encounterId ?? fight.bossId;
+
+          // Attempts / last-best (best = fastest kill).
           const attempt: AttemptSummary = {
             result: result.result,
             durationMs: result.durationMs,
@@ -791,16 +871,17 @@ export const useStore = create<Store>()(
               : compare.best;
           const nextAttempts = {
             ...attempts,
-            [encounterId]: { last: attempt, ...(best !== undefined ? { best } : {}) },
+            [key]: { last: attempt, ...(best !== undefined ? { best } : {}) },
           };
 
-          // Consumption (win or lose): passives 1 per char per distinct id;
-          // potion charges per char from the event stream; capped by the
-          // shared stock at the end.
+          // Consumption from the FINAL stream (win or lose): passives 1 per char
+          // per distinct id; potion charges per char from `heal` events; capped
+          // by the shared stock.
+          const slots = fight.partyConsumables ?? [];
           const members = [
-            { id: 'warrior', cons: wCons },
-            { id: 'priest', cons: pCons },
-            { id: 'mage', cons: mCons },
+            { id: 'warrior', cons: slots[0] ?? [] },
+            { id: 'priest', cons: slots[1] ?? [] },
+            { id: 'mage', cons: slots[2] ?? [] },
           ];
           const spent: Inventory = {};
           for (const m of members) {
@@ -827,13 +908,12 @@ export const useStore = create<Store>()(
             if (capped > 0) nextInventory[id] = (nextInventory[id] ?? 0) - capped;
           }
 
-          // The journal learns the boss and the roster learns it in parallel
-          // (GDD §2/§4) — every attempt counts, wipes included.
+          // Journal + familiarity (boss pulls only) — every attempt counts,
+          // wipes included (GDD §2/§4).
           let nextJournal = journal;
           let nextFamiliarity = familiarity;
-          if (enc.kind === 'boss') {
-            const prev = journal[encounterId];
-            const k = discover(enc.boss, result.events, prev);
+          if (fight.boss) {
+            const k = discover(fight.boss, result.events, journal[key]);
             const names: Record<string, string> = { warrior: 'Borin', priest: 'Seren', mage: 'Elara' };
             let deadName: string | undefined;
             for (const e of result.events) {
@@ -853,39 +933,56 @@ export const useStore = create<Store>()(
                   }
                 : {}),
             };
-            nextJournal = { ...journal, [encounterId]: entry };
+            nextJournal = { ...journal, [key]: entry };
             nextFamiliarity = { ...familiarity };
             for (const charId of ['warrior', 'priest', 'mage']) {
               nextFamiliarity[charId] = {
                 ...(nextFamiliarity[charId] ?? {}),
-                [encounterId]: (nextFamiliarity[charId]?.[encounterId] ?? 0) + 1,
+                [key]: (nextFamiliarity[charId]?.[key] ?? 0) + 1,
               };
             }
           }
 
+          // A watched kill unlocks the next encounter.
+          const nextCleared =
+            result.result === 'kill' && encounterId && !get().dungeonCleared[encounterId]
+              ? { ...get().dungeonCleared, [encounterId]: true }
+              : get().dungeonCleared;
+
           set({
-            fight: {
-              result,
-              seed,
-              party: defs,
-              ...(enc.kind === 'boss' ? { boss: enc.boss } : { pack: enc.pack }),
-              bossId: encounterId,
-              encounterId,
-              review,
-              compare,
-            },
+            fight: { ...fight, finalized: true },
             attempts: nextAttempts,
             inventory: nextInventory,
             journal: nextJournal,
             familiarity: nextFamiliarity,
-            playT: 0,
-            playing: true,
-            speed: 1,
-            view: 'combat',
+            dungeonCleared: nextCleared,
           });
         },
 
+        adoptCall: (action, atMs) => {
+          const { fight, journal, plans } = get();
+          if (!fight?.encounterId) return;
+          const key = fight.encounterId;
+          // Anchor to the nearest DISCOVERED boss cast within 8s before the
+          // call, else fall back to a raw time trigger (GDD §3 ground rule 2).
+          const seen = new Set(journal[key]?.seen ?? []);
+          let anchor: { abilityId: string; t: number } | undefined;
+          for (const e of fight.result.events) {
+            if (e.type !== 'castEnd' || e.source !== BOSS_ID) continue;
+            if (e.t < atMs - 8000 || e.t > atMs) continue;
+            const abilityId = String(e.meta?.['abilityId'] ?? '');
+            if (!seen.has(`timeline:${abilityId}`)) continue;
+            if (!anchor || e.t > anchor.t) anchor = { abilityId, t: e.t };
+          }
+          const trigger: PlanTrigger = anchor
+            ? { kind: 'bossCast', abilityId: anchor.abilityId }
+            : { kind: 'time', atMs: Math.round(atMs) };
+          const plan = plans[key] ?? { entries: [] };
+          set({ plans: { ...plans, [key]: { entries: [...plan.entries, { trigger, action }] } } });
+        },
+
         playT: 0,
+        frontierMs: 0,
         playing: false,
         speed: 1,
         setPlayback: (patch) => set(patch),

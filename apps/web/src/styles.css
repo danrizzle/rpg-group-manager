@@ -164,6 +164,17 @@ body {
 .playback { display: flex; align-items: center; gap: 6px; margin: 10px 0; }
 .scrubber { flex: 1; accent-color: var(--gold); }
 
+/* Live-call palette (slice 6): the tactical-pause action bar. */
+.call-palette {
+  display: flex; align-items: center; gap: 6px; margin: 10px 0 0;
+  padding: 6px 8px; border-radius: 6px;
+  background: #211a10; border: 1px solid var(--gold);
+}
+.call-palette .btn:disabled { opacity: 0.4; cursor: default; }
+.call-hint { font-size: 11px; margin-left: auto; }
+.calls-review { margin-top: 8px; border-top: 1px solid var(--panel-edge); padding-top: 6px; }
+.calls-review .btn-small { margin-left: 6px; }
+
 .log {
   height: 260px; overflow-y: auto; background: #0d0a07;
   border: 1px solid var(--panel-edge); border-radius: 6px; padding: 6px 8px;

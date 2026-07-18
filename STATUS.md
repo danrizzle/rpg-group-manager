@@ -2,9 +2,10 @@
 
 > Update this file whenever a slice lands. Roadmap definition: DESIGN.md §10.
 
-**Phase 3 (Progression) COMPLETE — all 6 slices done. Next up: phase 4
-(group content: dungeon, trinity, boss journal, boss plans, live calls).**
-As of July 2026.
+**Phase 4 (Group content) COMPLETE — all 6 slices done (party sim, trinity +
+Ember Forge, roster/dungeon web, boss journal, boss plans, live calls). Next
+up: phase 5 (roster & raids: 20 chars, loadout library, full call palette,
+mechanic type 4, tier-2 content, access buildings).** As of July 2026.
 
 ## Phase checklist
 
@@ -136,7 +137,7 @@ As of July 2026.
         completes with loss, workshop snapshot 600000→450000 ms, bank T2
         caps /150, boss-select stales + relabels the sim.
         Building costs deliberately revive the post-bridge timber loop.
-- [ ] **Phase 4 — Group content** (slice plan authored 2026-07-18, before
+- [x] **Phase 4 — Group content** (slice plan authored 2026-07-18, before
       any phase-4 code; engine before web inside every slice; byte-identity
       for all existing streams when new args are absent; CLI `--json`
       baselines captured pre-change and byte-compared):
@@ -284,19 +285,47 @@ As of July 2026.
         (126 green); all 7 solo baselines byte-identical. Verified
         in-browser: plan built in the editor → persisted → "PLAN — Push!"
         in the live log → kill.
-  - [ ] **Slice 6 — Live calls + tactical pause + call→plan adoption (web +
-        engine). ← NEXT (engine part is already done, see slice-5 notes;
-        remaining work is web-only. Handoff below.)** Engine: `FightSetup.calls?: TimedCall[]` — plan actions
-        fired at a wall time, same arsenal as the plan (§3 ground rule 1),
-        same reaction-time machinery, `call` events in the stream. Web:
-        dungeon pulls run in live mode — playback locked to the frontier,
-        tactical pause, a 2–3 button call palette (Law 1: "All CDs now!",
-        "Heal CD now!", "Stop damage!/Push!"); issuing a call re-runs the
-        deterministic fight with the call appended (past events identical —
-        purity makes live play a fold, not a second engine). Review lists
-        calls made with "adopt into plan" (anchored to the nearest
-        discovered boss cast, else a time trigger) — active play writes
-        your boss plan (§3 ground rule 2).
+  - [x] **Slice 6 — Live calls + tactical pause + call→plan adoption
+        (web-only; engine shipped in slice 5).** Dungeon pulls run in **live
+        mode**: playback locked to the frontier (`frontierMs`, a transient
+        top-level clock field tracked in the RAF loop) — the scrubber can't
+        seek ahead and the End button is hidden until the fight resolves once;
+        the existing Pause button is the tactical pause. A **3-button call
+        palette** (GDD §8 Law 1) rides above the playback bar while live and
+        unresolved: "All CDs now!" (warrior battle-shout + mage combustion +
+        pyroclasm), "Heal CD now!" (priest divine-hymn), and a stateful
+        "Stop damage!"/"Push!" toggle (holdDps). Buttons enable only at the
+        live edge (`|frontierMs − playT| < 200`), so a rewound view can't
+        rewrite already-watched events. Issuing a call appends
+        `{atMs: frontierMs, action}` to `fight.calls` and re-runs `runFight`
+        with the same seed/party/plan + the appended call, replacing
+        `fight.result` while keeping `playT`/`frontierMs` and resuming —
+        engine purity guarantees every event before `atMs` is byte-identical
+        (verified in-browser: log up to the call moment unchanged, only the
+        future diverges). **All party recording is deferred** from pull time
+        to a new `finalizeFight` action (fires from the `view.ended` effect on
+        kill OR wipe, guarded by `fight.finalized`): attempts/last-best,
+        consumable deduction, journal `discover`, familiarity +1, and the
+        watched-kill encounter unlock — so live-call re-runs never
+        double-count (measured: familiarity +1, not +N, across a re-run).
+        Solo pulls keep the legacy eager path untouched (no calls, End button,
+        free scrub). **Post-fight adoption** (§3 ground rule 2): the review
+        lists the calls made with per-call **Adopt** + "Adopt all"; `adoptCall`
+        anchors each to the nearest DISCOVERED boss `castEnd` within 8 s before
+        the call (→ `bossCast` trigger), else a `time` trigger, and appends to
+        `plans[encounterId]`. No engine changes; no persist bump (FightState
+        is transient; `frontierMs` not in the allowlist). **Landed:**
+        `store.ts` — deferred `pullEncounter`, `issueCall`/`finalizeFight`/
+        `adoptCall`, `frontierMs`; `FightView.tsx` — frontier clock, live
+        controls, call palette, `CallsAdoption`; styles for the palette.
+        Verified in-browser (isolated context, real save stashed): live pull →
+        pause → "Stop damage!" (past byte-identical, CALL line, toggled to
+        Push!) → the live-edge guard blocked a call after rewind → wipe
+        recorded once (no unlock) → clean re-pull with "Heal CD now!" after an
+        eruption → kill 4:29 unlocks Vulkan → adopt → bossCast(molten-eruption)
+        → divine-hymn plan entry → next pull fires "PLAN — Seren: Divine
+        Hymn!"; solo Cinder Maw unchanged. All 126 engine tests green; web
+        typecheck + build clean.
 - [ ] **Phase 5 — Roster & raids**: 20 chars, loadout library, full call
       palette, mechanic type 4, tier-2 catalyst content, access buildings
 - [ ] **Phase 6 — Guilds**: accounts/sync, server-authoritative real fights
@@ -431,12 +460,12 @@ Known gaps / deferred items:
   sunleaf (~50 game-min of gathering). All placeholder-tunable in
   `world/professions.ts`.
 
-## Phase 4 — HANDOFF: slice 6 remains (live calls, web-only)
+## Phase 4 — DONE (slice 6 landed; handoff below kept for the record)
 
-Slices 1–5 are landed, committed one commit per slice, all green (126
-engine tests; web builds; solo CLI baselines byte-identical throughout).
-What remains for phase-4 completion is **slice 6, web only** — the engine
-side (TimedCall, executor, past-identity guarantee) shipped in slice 5:
+**All six slices are landed and committed (one commit per slice), all green
+(126 engine tests; web typecheck + build; solo CLI baselines byte-identical
+throughout).** Slice 6 (live calls) shipped web-only per the handoff — the
+original spec is preserved below for provenance.
 
 1. **Live mode for dungeon pulls**: playback locked to the frontier (no
    scrubbing/seeking ahead, no End button until the fight resolves once),
@@ -631,6 +660,49 @@ alternative. Grouped by slice as they land.
   silently (same sanitize-not-block rule as solo pulls). Rejected:
   blocking the pull on shortage (a pull must never throw) and per-char
   reserved stock (inventing an allocation UI nobody asked for).
+
+**Slice 6 (live calls + tactical pause + call→plan adoption):**
+
+- **All party recording deferred to fight end (`finalizeFight`) rather than
+  a pre-pull snapshot.** A live call re-runs `runFight`; recording eagerly at
+  pull time (as slices 3–5 did) would double-count consumables and
+  familiarity on every re-run. The handoff floated two fixes — snapshot the
+  pre-pull inventory/journal on FightState, or defer everything to the end.
+  Deferring is cleaner (no snapshot bookkeeping) and matches the existing
+  "watched kill unlocks" pattern, which was already deferred to the
+  `view.ended` effect. **Rejected:** the pre-pull snapshot (more state to
+  thread, and the eager writes still have to be undone on re-run).
+- **Solo pulls stay on the eager path, untouched.** Only party/dungeon pulls
+  go live (calls are a dungeon feature), so `finalizeFight`/frontier-lock/
+  palette all gate on `fight.live`. Zero risk to the real save's solo Cinder
+  Maw flow. **Rejected:** unifying solo + party onto the deferred path (churn
+  on the byte-stable solo path for no feature gain).
+- **Frontier lock via a transient top-level `frontierMs`** (max playT ever
+  watched), advanced in the RAF clock; scrubber `max = resolved ? durationMs
+  : frontierMs`, End button hidden until resolved. **Rejected:** a separate
+  `resolved` boolean stored on the fight (derivable as `frontierMs >=
+  durationMs`, and re-runs that lengthen the fight keep it correct for free).
+- **Calls fire at `atMs = frontierMs`, and buttons enable only at the live
+  edge (`|frontierMs − playT| < 200`).** Anchoring the call to the live
+  frontier (not the possibly-rewound `playT`) guarantees the past-identity
+  precondition — everything before the frontier was already watched and is
+  byte-identical under the appended call. **Rejected:** `atMs = playT` with
+  free rewind (a call issued in the past would rewrite events the player
+  already saw; the property test only guarantees identity strictly before
+  `atMs`). Verified in-browser: after a rewind, the palette correctly
+  disabled.
+- **Adoption anchors to the nearest DISCOVERED boss `castEnd` within 8 s
+  before the call, else a raw `time` trigger.** Reuses the journal's
+  `seen` set so only known casts become triggers (matches the PlanPanel's
+  journal-gated triggers); 8 s covers a reaction-delayed call landing just
+  after a cast. **Rejected:** always a time trigger (loses the "you reacted
+  to Molten Eruption" intent that makes the plan legible) and anchoring to
+  undiscovered casts (would leak knowledge the journal law hides).
+- **"All CDs now!" includes Pyroclasm** (talent-gated) alongside battle-shout
+  and combustion; it fizzles harmlessly in the engine if the mage lacks the
+  talent, so no per-party palette customization is needed. **Rejected:**
+  filtering the call's actions against the live party (the engine already
+  no-ops missing abilities; filtering would duplicate `sanitizePlan`).
 
 ## Environment notes
 

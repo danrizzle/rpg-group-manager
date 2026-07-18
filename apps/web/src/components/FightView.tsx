@@ -1,5 +1,5 @@
-import { CONSUMABLES_BY_ID, PLAYER_ID, type PotionNote } from '@rpg/engine';
-import { useEffect, useMemo, useRef } from 'react';
+import { CONSUMABLES_BY_ID, PLAYER_ID, type PlanAction, type PotionNote } from '@rpg/engine';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildLog, mmss, Replay, type ActorView } from '../fight/replay';
 import { useStore, type AttemptSummary, type FightState } from '../store';
 import type { BossId } from '../world/types';
@@ -24,6 +24,27 @@ const POTION_NOTES: Record<PotionNote, string> = {
 };
 
 const cause = (id: string): string => id.replace(/-/g, ' ');
+
+// The live-call palette (GDD §8 Law 1: three buttons, not a piano). Each maps
+// to one or more plan actions issued at the frontier; the same arsenal the plan
+// editor exposes (§3 ground rule 1).
+const ALL_CDS: PlanAction[] = [
+  { kind: 'ability', charId: 'warrior', abilityId: 'battle-shout' },
+  { kind: 'ability', charId: 'mage', abilityId: 'combustion' },
+  { kind: 'ability', charId: 'mage', abilityId: 'pyroclasm' },
+];
+const HEAL_CD: PlanAction[] = [{ kind: 'ability', charId: 'priest', abilityId: 'divine-hymn' }];
+
+/** Human label for one adopted/logged call action (mirrors PlanPanel). */
+function callLabel(a: PlanAction): string {
+  if (a.kind === 'holdDps') return a.hold ? 'Stop damage!' : 'Push!';
+  if (a.kind === 'stance') {
+    const t = a.patch.targeting;
+    return t === 1 ? 'Elara → Cleave' : t === 0 ? 'Elara → Focus' : `${a.charId}: stance`;
+  }
+  const names: Record<string, string> = { warrior: 'Battle Shout', mage: a.abilityId === 'pyroclasm' ? 'Pyroclasm' : 'Combustion', priest: 'Divine Hymn' };
+  return names[a.charId] ?? a.abilityId;
+}
 
 /** Signed m:ss delta vs a reference kill time. */
 const delta = (ms: number, ref: number): string => {
@@ -96,6 +117,44 @@ function PostFightReview({ fight }: { fight: FightState }) {
       <div className="statline muted">
         Used: {used.length ? used.join(', ') : 'no consumables'}
       </div>
+      {fight.live && fight.calls.length > 0 && <CallsAdoption fight={fight} />}
+    </div>
+  );
+}
+
+/** GDD §3 ground rule 2: active play writes your plan — adopt the calls you
+ *  made (bossCast-anchored where a discovered cast preceded them, else time). */
+function CallsAdoption({ fight }: { fight: FightState }) {
+  const adoptCall = useStore((s) => s.adoptCall);
+  const [adopted, setAdopted] = useState<Set<number>>(new Set());
+  const adopt = (i: number, action: PlanAction, atMs: number) => {
+    adoptCall(action, atMs);
+    setAdopted((s) => new Set(s).add(i));
+  };
+  const adoptAll = () =>
+    fight.calls.forEach((c, i) => {
+      if (!adopted.has(i)) adoptCall(c.action, c.atMs);
+    });
+  return (
+    <div className="calls-review">
+      <div className="statline">
+        Calls made
+        <button className="btn btn-small" onClick={adoptAll} disabled={adopted.size === fight.calls.length}>
+          Adopt all into plan
+        </button>
+      </div>
+      {fight.calls.map((c, i) => (
+        <div key={i} className="statline muted">
+          {mmss(c.atMs)} — {callLabel(c.action)}{' '}
+          {adopted.has(i) ? (
+            <span className="chip">adopted ✓</span>
+          ) : (
+            <button className="btn btn-small" onClick={() => adopt(i, c.action, c.atMs)}>
+              Adopt
+            </button>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -150,11 +209,14 @@ export function FightView() {
   const pull = useStore((s) => s.pull);
   const pullEncounter = useStore((s) => s.pullEncounter);
   const playT = useStore((s) => s.playT);
+  const frontierMs = useStore((s) => s.frontierMs);
   const playing = useStore((s) => s.playing);
   const speed = useStore((s) => s.speed);
   const setPlayback = useStore((s) => s.setPlayback);
   const recordBossKill = useStore((s) => s.recordBossKill);
   const recordEncounterCleared = useStore((s) => s.recordEncounterCleared);
+  const issueCall = useStore((s) => s.issueCall);
+  const finalizeFight = useStore((s) => s.finalizeFight);
   const logRef = useRef<HTMLDivElement>(null);
 
   const replayCfg = useMemo(() => {
@@ -183,9 +245,16 @@ export function FightView() {
     const tick = (now: number) => {
       const dt = (now - last) * speed;
       last = now;
-      const { playT: t } = useStore.getState();
+      const { playT: t, frontierMs: f } = useStore.getState();
       const next = Math.min(fight.result.durationMs, t + dt);
-      setPlayback(next >= fight.result.durationMs ? { playT: next, playing: false } : { playT: next });
+      // The frontier is the furthest point ever watched — live pulls lock the
+      // scrubber and the call palette to it (no scrubbing/calling ahead).
+      const frontier = Math.max(f, next);
+      setPlayback(
+        next >= fight.result.durationMs
+          ? { playT: next, frontierMs: frontier, playing: false }
+          : { playT: next, frontierMs: frontier },
+      );
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -194,13 +263,20 @@ export function FightView() {
 
   const view = replay?.seek(playT) ?? null;
 
-  // A watched kill unlocks: zone bosses set region flags, dungeon encounters
-  // open the next one in the chain.
+  // Reaching the natural end resolves the fight. Live (party) pulls defer ALL
+  // recording to here so live-call re-runs never double-count (slice 6);
+  // finalizeFight is idempotent (guarded on fight.finalized) and unlocks the
+  // next encounter on a kill. Solo pulls keep the legacy eager path.
   useEffect(() => {
-    if (view?.ended !== 'kill' || !fight) return;
+    if (!view?.ended || !fight) return;
+    if (fight.live) {
+      finalizeFight();
+      return;
+    }
+    if (view.ended !== 'kill') return;
     if (fight.encounterId) recordEncounterCleared(fight.encounterId);
     else recordBossKill(fight.bossId as BossId);
-  }, [view?.ended, fight, recordBossKill, recordEncounterCleared]);
+  }, [view?.ended, fight, recordBossKill, recordEncounterCleared, finalizeFight]);
 
   const visibleLog = useMemo(() => {
     const upTo = log.filter((l) => l.t <= playT);
@@ -233,6 +309,15 @@ export function FightView() {
   const otherEnemies = enemies.filter((a) => a !== boss && (a.alive || a.hp > 0));
   const livingOthers = enemies.filter((a) => a !== boss && a.alive);
   const enrageIn = fight.boss ? fight.boss.enrageAtMs - playT : 0;
+
+  // Live pulls (party): the scrubber and call palette are locked to the
+  // frontier until the fight resolves once; then it's a normal replay.
+  const resolved = !fight.live || frontierMs >= fight.result.durationMs;
+  const scrubMax = resolved ? fight.result.durationMs : frontierMs;
+  // Calls fire at the live edge only — a rewound view can't rewrite watched events.
+  const atLiveEdge = !!fight.live && !resolved && Math.abs(frontierMs - playT) < 200;
+  const lastHold = [...fight.calls].reverse().find((c) => c.action.kind === 'holdDps');
+  const isHolding = lastHold?.action.kind === 'holdDps' ? lastHold.action.hold : false;
 
   return (
     <section className="panel fight-panel">
@@ -285,6 +370,23 @@ export function FightView() {
         </>
       )}
 
+      {fight.live && !resolved && (
+        <div className="call-palette">
+          <button className="btn btn-small" disabled={!atLiveEdge} onClick={() => issueCall(ALL_CDS)}>
+            All CDs now!
+          </button>
+          <button className="btn btn-small" disabled={!atLiveEdge} onClick={() => issueCall(HEAL_CD)}>
+            Heal CD now!
+          </button>
+          <button className="btn btn-small" disabled={!atLiveEdge} onClick={() => issueCall([{ kind: 'holdDps', hold: !isHolding }])}>
+            {isHolding ? 'Push!' : 'Stop damage!'}
+          </button>
+          <span className="muted call-hint">
+            {atLiveEdge ? 'Call at the live moment.' : 'Pause at the frontier to call.'}
+          </span>
+        </div>
+      )}
+
       <div className="playback">
         <button className="btn" onClick={() => setPlayback({ playing: !playing })}>
           {playing ? 'Pause' : 'Play'}
@@ -294,16 +396,18 @@ export function FightView() {
             {s}×
           </button>
         ))}
-        <button className="btn btn-small" onClick={() => setPlayback({ playT: fight.result.durationMs, playing: false })}>
-          End
-        </button>
+        {resolved && (
+          <button className="btn btn-small" onClick={() => setPlayback({ playT: fight.result.durationMs, playing: false })}>
+            End
+          </button>
+        )}
         <input
           className="scrubber"
           type="range"
           min={0}
-          max={fight.result.durationMs}
+          max={scrubMax}
           step={100}
-          value={playT}
+          value={Math.min(playT, scrubMax)}
           onChange={(e) => setPlayback({ playT: Number(e.target.value), playing: false })}
         />
       </div>
