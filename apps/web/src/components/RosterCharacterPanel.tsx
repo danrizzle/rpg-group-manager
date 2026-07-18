@@ -154,7 +154,10 @@ export function RosterCharacterPanel({ charId }: { charId: RosterCharId }) {
         {(reactionTimeMs(def.behavior.discipline) / 1000).toFixed(1)}s ·{' '}
         {(mistakeChance(def.behavior.discipline) * 100).toFixed(1)}% mistake chance
       </div>
-      <p className="muted">Familiarity with each boss grows per attempt (from slice 4).</p>
+      <p className="muted">
+        Familiarity with each boss grows per attempt (wipes included) and adds bonus discipline
+        against that boss — see the journal.
+      </p>
 
       <h3>Abilities</h3>
       <ul className="ability-list">

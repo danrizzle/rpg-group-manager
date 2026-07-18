@@ -1,17 +1,27 @@
 /// <reference lib="webworker" />
 import {
+  COMP_PASSIVES,
   DEFAULT_PULL_CYCLE,
+  GROUP_CDS,
   ITEMS_BY_ID,
   ZONES,
+  applyComp,
   devalue,
+  encounterById,
   grindRates,
   makeCinderMaw,
+  makeEmberForge,
   makeMage,
+  makePriest,
+  makeWarrior,
   packBandMax,
+  redactBoss,
   runMonteCarlo,
+  type BossKnowledge,
   type GearSlot,
   type GrindRates,
   type Item,
+  type PartyMember,
   type StanceConfig,
 } from '@rpg/engine';
 import type { ZoneId } from '../world/types';
@@ -32,6 +42,24 @@ interface BehaviorInput {
   damageWhileMoving: number;
 }
 
+export interface RosterBuildInput {
+  stance: StanceConfig;
+  gear: Record<GearSlot, string>;
+  consumables: string[];
+}
+
+/**
+ * Dungeon-boss dummy sim (phase 4): present ⇒ simulate the TRINITY against
+ * the journal-redacted boss — only revealed mechanics run (GDD §4).
+ */
+export interface EncounterSimInput {
+  id: string;
+  knowledge: BossKnowledge;
+  roster: { warrior: RosterBuildInput; priest: RosterBuildInput };
+  /** Familiarity bonus discipline per char id (warrior/priest/mage). */
+  familiarity: Record<string, number>;
+}
+
 export interface SimRequest {
   stance: StanceConfig;
   behavior: BehaviorInput;
@@ -42,6 +70,7 @@ export interface SimRequest {
   consumables: string[];
   /** Dummy target (slice 6 QoL); unknown ids fall back to Cinder Maw. */
   bossId: string;
+  encounter?: EncounterSimInput;
   iterations: number;
   baseSeed: number;
 }
@@ -85,18 +114,55 @@ const resolveItems = (gear: Record<GearSlot, string>): Item[] =>
     .map((id) => ITEMS_BY_ID[id])
     .filter((i): i is Item => Boolean(i));
 
+/** The trinity at the requested builds — mirrors the store's pullEncounter. */
+function buildParty(req: SimRequest): PartyMember[] {
+  const enc = req.encounter!;
+  const fam = (id: string) => enc.familiarity[id] ?? 0;
+  const defs = applyComp(
+    [
+      makeWarrior(
+        { discipline: 50 + fam('warrior') },
+        resolveItems(enc.roster.warrior.gear),
+        10,
+        resolveConsumables(enc.roster.warrior.consumables),
+      ),
+      makePriest(
+        { discipline: 50 + fam('priest') },
+        resolveItems(enc.roster.priest.gear),
+        10,
+        resolveConsumables(enc.roster.priest.consumables),
+      ),
+      makeMage(
+        { ...req.behavior, discipline: req.behavior.discipline + fam('mage') },
+        resolveItems(req.gear),
+        req.level,
+        req.talents,
+        resolveConsumables(req.consumables),
+      ),
+    ],
+    GROUP_CDS,
+    COMP_PASSIVES,
+  );
+  const stances = [enc.roster.warrior.stance, enc.roster.priest.stance, req.stance];
+  return defs.map((character, i) => ({ character, stance: stances[i]! }));
+}
+
 function runSim(req: SimRequest): SimResponse {
-  const items = resolveItems(req.gear);
   const started = performance.now();
-  const result = runMonteCarlo(
-    {
-      player: makeMage(req.behavior, items, req.level, req.talents, resolveConsumables(req.consumables)),
+  let setup;
+  if (req.encounter) {
+    const enc = encounterById(makeEmberForge(), req.encounter.id);
+    if (!enc || enc.kind !== 'boss') throw new Error(`unknown boss encounter '${req.encounter.id}'`);
+    // The dummy simulates ONLY what the journal knows (GDD §4).
+    setup = { party: buildParty(req), boss: redactBoss(enc.boss, req.encounter.knowledge) };
+  } else {
+    setup = {
+      player: makeMage(req.behavior, resolveItems(req.gear), req.level, req.talents, resolveConsumables(req.consumables)),
       boss: (BOSS_FACTORIES[req.bossId] ?? makeCinderMaw)(),
       stance: req.stance,
-    },
-    req.iterations,
-    req.baseSeed,
-  );
+    };
+  }
+  const result = runMonteCarlo(setup, req.iterations, req.baseSeed);
   return {
     iterations: req.iterations,
     elapsedMs: performance.now() - started,

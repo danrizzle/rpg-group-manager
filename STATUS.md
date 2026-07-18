@@ -220,7 +220,7 @@ As of July 2026.
         in-browser (whelps 0:22, Slagmaw 4:04 with 153 priest HPS, Vulkan
         3:42); flask consumed from shared stock; out-of-stock slot skipped
         ("Used: no consumables"); solo Cinder Maw pull byte-path re-verified.
-  - [ ] **Slice 4 — Boss journal + discovery + familiarity (engine + web).**
+  - [x] **Slice 4 — Boss journal + discovery + familiarity (engine + web).**
         Engine `model/journal.ts`: `discoverFromEvents` (stream-only facts:
         timeline casts seen, movement/enrage/phase-2/adds/tantrum seen,
         lowest boss HP reached), monotone merge, `explorationPct`,
@@ -232,6 +232,23 @@ As of July 2026.
         from the def once seen, last-wipe line from `fightReview`), dummy
         sims of dungeon bosses run against the redacted def, per-character
         familiarity per boss from attempt counts (wipes count — §2), v7.
+        **Landed:** `model/journal.ts` — knowledge = monotone set of
+        `mechanicsOf(def)` keys (timeline:<id> / movement / enrage / adds /
+        tantrum; no-op slots don't count, retuned defs auto-prune stale
+        keys) + lowest-boss-HP + attempts; `discover` is stream-only,
+        `redactBoss` no-ops the unseen (full knowledge reproduces the true
+        fight byte-for-byte — tested); `familiarityBonus` = min(20, 2·
+        attempts) discipline. Web: `journal`/`familiarity` persisted (v7),
+        pullEncounter folds discovery + wipe note (killedBy + who died) and
+        bumps familiarity for all three; JournalCard in DungeonPanel (✓
+        rows with def numbers, ? ——— rows, ⚰ line, familiarity chips);
+        dummy sim: dungeon bosses join the target row once attempted,
+        worker builds the trinity and runs `redactBoss` (SimRequest.
+        encounter carries roster+knowledge+familiarity); `simIsStale`
+        rewritten as whole-request comparison. 10 new tests (117 green).
+        In-browser: Slagmaw wipe at 2:38 produced "67% explored, ✓ eruption
+        ✓ movement, ? ———, ⚰ melee killed Seren, +2 discipline each"; party
+        dummy sim showed 84.5% "(known mechanics only)".
   - [ ] **Slice 5 — Boss plan timeline + group CDs + hold DPS (engine +
         web).** Engine `model/plan.ts`: declarative `BossPlan` — triggers
         (pull, time, boss-cast, phase, boss-HP-below) × actions (fire
@@ -467,6 +484,31 @@ alternative. Grouped by slice as they land.
   members are at cap and dungeon reward loops (loot) are phase-5 scope;
   trash is a time/consumable cost, not a farm. Rejected: XP-bearing
   trash (nothing to spend it on at cap 10).
+
+**Slice 4 (journal + discovery + familiarity):**
+
+- **World bosses (Cinder Maw, zone bosses) are grandfathered as fully
+  known** — no journals for them; their dummy sims stay unrestricted.
+  They predate the journal system and are already balanced around free
+  simulation. Rejected: retrofitting journals (would lock existing sims
+  behind attempts and break the phase-2/3 loop).
+- **Familiarity = bonus discipline** (min(20, 2/attempt)) rather than a
+  new behavior stat: discipline already drives exactly what §2 says
+  familiarity improves (mistake rate + reaction time), and it composes
+  with calls in slice 6 for free. Rejected: a parallel per-boss mistake
+  multiplier (second tuning surface, no new player-visible meaning).
+- **Journal timers/numbers display the TRUE def values once a mechanic
+  is seen** (one glimpse of Molten Eruption reveals "every 35 s, 700
+  fire"), rather than estimating from observed samples. Jittered timers
+  make observed averages noisy-wrong, and §4's journal mock shows exact
+  timers. The `discover` API stays stream-only; only presentation reads
+  the def.
+- **Familiarity is keyed per character** (`familiarity[charId][bossId]`)
+  even though v1 parties always attempt together — phase-5 roster swaps
+  will diverge the counts; storage shape shouldn't need migrating then.
+- **The dummy sim's boss-HP bar is fully known from attempt 1** (hp is
+  visible in the fight UI), so `redactBoss` keeps hp/melee — only
+  mechanics are hidden.
 
 **Slice 3 (roster + dungeon web):**
 

@@ -7,7 +7,9 @@ import {
   MAGE_TALENTS,
   PLAYER_ID,
   applyComp,
+  discover,
   encounterById,
+  familiarityBonus,
   levelForXp,
   makeCinderMaw,
   makeEmberForge,
@@ -20,6 +22,7 @@ import {
   unlockedControls,
   fightReview,
   type BossDefinition,
+  type BossKnowledge,
   type CharacterDef,
   type ConsumableDefinition,
   type FightResult,
@@ -179,6 +182,19 @@ export const DEFAULT_ROSTER: Record<RosterCharId, RosterBuild> = {
   },
 };
 
+/** What the journal remembers of the last failed attempt (GDD §4 ⚰ line). */
+export interface JournalWipeNote {
+  atMs: number;
+  killedBy?: string;
+  /** Display name of who died last (the wipe moment). */
+  deadName?: string;
+  bossHpPctLeft?: number;
+}
+
+export interface JournalEntry extends BossKnowledge {
+  lastWipe?: JournalWipeNote;
+}
+
 /** Meta for the roster UI; build factories live in the engine. */
 export const ROSTER_CHARS: { id: RosterCharId; name: string; classLabel: string; role: string }[] = [
   { id: 'warrior', name: 'Borin', classLabel: 'Warrior', role: 'tank' },
@@ -217,6 +233,65 @@ function stripLockedControls(stance: StanceConfig, talents: string[]): StanceCon
   return stance;
 }
 
+
+/** Dungeon bosses simulatable on the dummy once the journal knows them. */
+export const DUNGEON_SIM_IDS = ['slagmaw', 'vulkan'];
+
+/**
+ * The exact SimRequest the current build would produce — used both to fire
+ * sims and to detect stale results (compare everything but the iteration
+ * count). The dummy simulates equipped slots for free at nominal charges
+ * (GDD §3), and dungeon targets carry the roster + journal knowledge so the
+ * worker simulates the trinity against only what's been discovered.
+ */
+export function buildSimRequest(
+  s: Pick<
+    Store,
+    | 'stance' | 'behavior' | 'gear' | 'xp' | 'talents' | 'equippedConsumables'
+    | 'simTarget' | 'roster' | 'journal' | 'familiarity'
+  >,
+  iterations: number,
+): SimRequest {
+  const isDungeon = DUNGEON_SIM_IDS.includes(s.simTarget);
+  const k = s.journal[s.simTarget];
+  const fam = (charId: string) => familiarityBonus(s.familiarity[charId]?.[s.simTarget] ?? 0);
+  return {
+    stance: s.stance,
+    behavior: s.behavior,
+    gear: s.gear,
+    level: levelForXp(s.xp),
+    talents: s.talents,
+    consumables: [...s.equippedConsumables],
+    bossId: s.simTarget,
+    ...(isDungeon
+      ? {
+          encounter: {
+            id: s.simTarget,
+            knowledge: {
+              seen: k?.seen ?? [],
+              lowestBossHpPct: k?.lowestBossHpPct ?? 100,
+              attempts: k?.attempts ?? 0,
+            },
+            roster: {
+              warrior: {
+                stance: s.roster.warrior.stance,
+                gear: s.roster.warrior.gear,
+                consumables: [...s.roster.warrior.consumables],
+              },
+              priest: {
+                stance: s.roster.priest.stance,
+                gear: s.roster.priest.gear,
+                consumables: [...s.roster.priest.consumables],
+              },
+            },
+            familiarity: { warrior: fam('warrior'), priest: fam('priest'), mage: fam('mage') },
+          },
+        }
+      : {}),
+    iterations,
+    baseSeed: SIM_BASE_SEED,
+  };
+}
 
 const worker = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' });
 
@@ -303,6 +378,10 @@ interface Store {
   dungeonCleared: Record<string, boolean>;
   pullEncounter: (encounterId: string) => void;
   recordEncounterCleared: (encounterId: string) => void;
+  /** Boss journals (GDD §4): encounter id → discovered knowledge (persisted). */
+  journal: Record<string, JournalEntry>;
+  /** Familiarity: char id → boss/encounter id → attempts (persisted). */
+  familiarity: Record<string, Record<string, number>>;
 
   // --- replay playback clock ---
   playT: number;
@@ -502,26 +581,18 @@ export const useStore = create<Store>()(
 
         sim: { running: false, result: null },
         simTarget: 'cinder-maw',
-        setSimTarget: (bossId) => set({ simTarget: BOSS_FACTORIES[bossId] ? bossId : 'cinder-maw' }),
+        setSimTarget: (bossId) =>
+          set({
+            simTarget:
+              BOSS_FACTORIES[bossId] || DUNGEON_SIM_IDS.includes(bossId) ? bossId : 'cinder-maw',
+          }),
         runSim: (iterations) => {
-          const { stance, behavior, gear, sim, xp, talents, equippedConsumables, simTarget } = get();
-          if (sim.running) return;
+          const s = get();
+          if (s.sim.running) return;
           const id = nextId++;
-          // The dummy simulates the equipped slots for free at nominal charges
-          // (GDD §3) — results don't churn with stock levels.
-          const request: SimRequest = {
-            stance,
-            behavior,
-            gear,
-            level: levelForXp(xp),
-            talents,
-            consumables: [...equippedConsumables],
-            bossId: simTarget,
-            iterations,
-            baseSeed: SIM_BASE_SEED,
-          };
+          const request = buildSimRequest(s, iterations);
           pendingSim.set(id, request);
-          set({ sim: { running: true, result: sim.result } });
+          set({ sim: { running: true, result: s.sim.result } });
           post({ kind: 'sim', id, req: request });
         },
 
@@ -620,6 +691,8 @@ export const useStore = create<Store>()(
         setActiveChar: (c) => set({ activeChar: c }),
 
         dungeonCleared: {},
+        journal: {},
+        familiarity: {},
         recordEncounterCleared: (encounterId) =>
           set((s) =>
             s.dungeonCleared[encounterId]
@@ -629,7 +702,7 @@ export const useStore = create<Store>()(
         pullEncounter: (encounterId) => {
           const {
             stance, behavior, gear, xp, talents, equippedConsumables,
-            roster, inventory, attempts, unlocks, dungeonCleared,
+            roster, inventory, attempts, unlocks, dungeonCleared, journal, familiarity,
           } = get();
           if (!unlocks.cinderMawKilled) return;
           const dungeon = makeEmberForge();
@@ -645,11 +718,33 @@ export const useStore = create<Store>()(
             [roster.warrior.consumables, roster.priest.consumables, equippedConsumables],
             inventory,
           ) as [ConsumableDefinition[], ConsumableDefinition[], ConsumableDefinition[]];
+          // Boss familiarity (GDD §2): attempts at THIS boss sharpen each
+          // character — bonus discipline on top of their earned stat.
+          const fam = (charId: string): number =>
+            enc.kind === 'boss'
+              ? familiarityBonus(familiarity[charId]?.[encounterId] ?? 0)
+              : 0;
           const defs = applyComp(
             [
-              makeWarrior(undefined, resolveGear(roster.warrior.gear), 10, wCons),
-              makePriest(undefined, resolveGear(roster.priest.gear), 10, pCons),
-              makeMage(behavior, resolveGear(gear), levelForXp(xp), talents, mCons),
+              makeWarrior(
+                { discipline: DEFAULT_BEHAVIOR.discipline + fam('warrior') },
+                resolveGear(roster.warrior.gear),
+                10,
+                wCons,
+              ),
+              makePriest(
+                { discipline: DEFAULT_BEHAVIOR.discipline + fam('priest') },
+                resolveGear(roster.priest.gear),
+                10,
+                pCons,
+              ),
+              makeMage(
+                { ...behavior, discipline: behavior.discipline + fam('mage') },
+                resolveGear(gear),
+                levelForXp(xp),
+                talents,
+                mCons,
+              ),
             ],
             GROUP_CDS,
             COMP_PASSIVES,
@@ -717,6 +812,42 @@ export const useStore = create<Store>()(
             if (capped > 0) nextInventory[id] = (nextInventory[id] ?? 0) - capped;
           }
 
+          // The journal learns the boss and the roster learns it in parallel
+          // (GDD §2/§4) — every attempt counts, wipes included.
+          let nextJournal = journal;
+          let nextFamiliarity = familiarity;
+          if (enc.kind === 'boss') {
+            const prev = journal[encounterId];
+            const k = discover(enc.boss, result.events, prev);
+            const names: Record<string, string> = { warrior: 'Borin', priest: 'Seren', mage: 'Elara' };
+            let deadName: string | undefined;
+            for (const e of result.events) {
+              if (e.type === 'death' && names[e.source]) deadName = names[e.source];
+            }
+            const wipe = review.wipe;
+            const entry: JournalEntry = {
+              ...k,
+              ...(wipe
+                ? {
+                    lastWipe: {
+                      atMs: wipe.atMs,
+                      ...(wipe.killedBy !== undefined ? { killedBy: wipe.killedBy } : {}),
+                      ...(deadName !== undefined ? { deadName } : {}),
+                      ...(wipe.bossHpPctLeft !== undefined ? { bossHpPctLeft: wipe.bossHpPctLeft } : {}),
+                    },
+                  }
+                : {}),
+            };
+            nextJournal = { ...journal, [encounterId]: entry };
+            nextFamiliarity = { ...familiarity };
+            for (const charId of ['warrior', 'priest', 'mage']) {
+              nextFamiliarity[charId] = {
+                ...(nextFamiliarity[charId] ?? {}),
+                [encounterId]: (nextFamiliarity[charId]?.[encounterId] ?? 0) + 1,
+              };
+            }
+          }
+
           set({
             fight: {
               result,
@@ -730,6 +861,8 @@ export const useStore = create<Store>()(
             },
             attempts: nextAttempts,
             inventory: nextInventory,
+            journal: nextJournal,
+            familiarity: nextFamiliarity,
             playT: 0,
             playing: true,
             speed: 1,
@@ -938,7 +1071,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 6,
+      version: 7,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
@@ -949,6 +1082,8 @@ export const useStore = create<Store>()(
         loadouts: s.loadouts,
         roster: s.roster,
         dungeonCleared: s.dungeonCleared,
+        journal: s.journal,
+        familiarity: s.familiarity,
         xp: s.xp,
         region: s.region,
         unlocks: s.unlocks,
@@ -994,6 +1129,9 @@ export const useStore = create<Store>()(
           priest: sanitizeRosterBuild(s.roster?.priest, DEFAULT_ROSTER.priest),
         };
         s.dungeonCleared = { ...(s.dungeonCleared ?? {}) };
+        // (v7, phase-4 slice 4: journal + familiarity join unconditionally.)
+        s.journal = { ...(s.journal ?? {}) };
+        s.familiarity = { ...(s.familiarity ?? {}) };
         // Repair against current content — talent ids may have changed.
         s.talents = sanitizeTalentSelection(
           MAGE_TALENTS,
@@ -1011,32 +1149,13 @@ export const useStore = create<Store>()(
   ),
 );
 
-/** Is the shown sim result out of date vs. the current setup? */
-export function simIsStale(
-  sim: SimState,
-  stance: StanceConfig,
-  behavior: BehaviorOverrides,
-  gear: GearSelection,
-  level: number,
-  talents: string[],
-  consumables: string[],
-  simTarget: string,
-): boolean {
+/**
+ * Is the shown sim result out of date vs. the current setup? The whole
+ * would-be request (build, target, roster, journal knowledge) is compared —
+ * everything except how many iterations were run.
+ */
+export function simIsStale(sim: SimState, current: SimRequest): boolean {
   if (!sim.result) return false;
-  const r = sim.result.request;
-  return (
-    r.bossId !== simTarget ||
-    r.level !== level ||
-    r.talents.join(',') !== talents.join(',') ||
-    r.consumables.join(',') !== consumables.join(',') ||
-    Object.entries(gear).some(([slot, id]) => r.gear[slot as GearSlot] !== id) ||
-    r.behavior.discipline !== behavior.discipline ||
-    r.behavior.aoeEfficiency !== behavior.aoeEfficiency ||
-    r.behavior.damageWhileMoving !== behavior.damageWhileMoving ||
-    r.stance.offense !== stance.offense ||
-    r.stance.targeting !== stance.targeting ||
-    r.stance.potionThresholdPct !== stance.potionThresholdPct ||
-    r.stance.burstCds !== stance.burstCds ||
-    (r.stance.barrierPolicy ?? 'reactive') !== (stance.barrierPolicy ?? 'reactive')
-  );
+  const strip = ({ iterations: _i, ...rest }: SimRequest) => rest;
+  return JSON.stringify(strip(sim.result.request)) !== JSON.stringify(strip(current));
 }

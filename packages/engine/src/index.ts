@@ -59,6 +59,15 @@ export { makePriest, priestBaseForLevel } from './content/classes/priest';
 export { applyComp, unlockedGroupCds } from './model/comp';
 export type { CompPassiveDefinition, GroupCdDefinition } from './model/comp';
 export { GROUP_CDS, COMP_PASSIVES } from './content/groupCds';
+export {
+  EMPTY_KNOWLEDGE,
+  discover,
+  explorationPct,
+  familiarityBonus,
+  mechanicsOf,
+  redactBoss,
+} from './model/journal';
+export type { BossKnowledge, MechanicKey } from './model/journal';
 export { encounterById } from './model/dungeon';
 export type { DungeonDefinition, DungeonEncounter } from './model/dungeon';
 export {

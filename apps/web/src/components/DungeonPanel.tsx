@@ -1,18 +1,91 @@
-import { makeEmberForge } from '@rpg/engine';
+import {
+  explorationPct,
+  familiarityBonus,
+  makeEmberForge,
+  mechanicsOf,
+  type BossDefinition,
+  type MechanicKey,
+} from '@rpg/engine';
 import { useMemo } from 'react';
 import { mmss } from '../fight/replay';
-import { ROSTER_CHARS, useStore } from '../store';
+import { ROSTER_CHARS, useStore, type JournalEntry } from '../store';
+
+const secs = (ms: number) => `${Math.round(ms / 1000)} s`;
+
+/** Human line for a discovered mechanic — numbers straight from the def. */
+function mechanicLine(def: BossDefinition, key: MechanicKey): string {
+  if (key.startsWith('timeline:')) {
+    const t = def.timeline.find((x) => `timeline:${x.id}` === key);
+    if (!t) return key;
+    return `${t.name} — every ${secs(t.everyMs)}, ${t.damage} ${t.damageType} to the whole group`;
+  }
+  switch (key) {
+    case 'movement':
+      return `Eruptions — every ${secs(def.movementWindows.everyMs)} everyone must move or take ${def.movementWindows.failDamage} ${def.movementWindows.failDamageType}`;
+    case 'enrage':
+      return `Enrage at ${mmss(def.enrageAtMs)} — damage ×${def.enrageDamageMult}`;
+    case 'adds':
+      return `Phase 2 at ${def.addPhase.atHpPct}% — ${def.addPhase.addsPerWave}× ${def.addPhase.add.name} every ${secs(def.addPhase.waveEveryMs)}`;
+    case 'tantrum':
+      return `Tantrum — an add alive longer than ${secs(def.addPhase.tantrumAfterMs)} enrages the boss (×${def.addPhase.tantrumDamageMult})`;
+    default:
+      return key;
+  }
+}
+
+/** Boss journal (GDD §4): ✓ discovered rows, ??? for the rest, wipe line. */
+function JournalCard({ boss, entry }: { boss: BossDefinition; entry: JournalEntry | undefined }) {
+  const familiarity = useStore((s) => s.familiarity);
+  if (!entry || entry.attempts === 0) {
+    return <div className="control-desc">Journal empty — send the group in to learn its tricks.</div>;
+  }
+  const keys = mechanicsOf(boss);
+  const seen = new Set(entry.seen);
+  const pct = Math.round(explorationPct(boss, entry) * 100);
+  const famChips = [...ROSTER_CHARS.map((c) => ({ id: c.id, name: c.name })), { id: 'mage', name: 'Elara' }]
+    .map(({ id, name }) => ({ name, bonus: familiarityBonus(familiarity[id]?.[boss.id] ?? 0) }))
+    .filter((c) => c.bonus > 0);
+  return (
+    <div className="review-block">
+      <div className="statline">
+        Journal — {pct}% explored · {entry.attempts} attempt{entry.attempts === 1 ? '' : 's'} · best
+        pull {entry.lowestBossHpPct <= 0 ? 'kill' : `${Math.round(entry.lowestBossHpPct)}% boss HP`}
+      </div>
+      {keys.map((key) => (
+        <div key={key} className={`statline ${seen.has(key) ? '' : 'muted'}`}>
+          {seen.has(key) ? `✓ ${mechanicLine(boss, key)}` : '? ———'}
+        </div>
+      ))}
+      {entry.lastWipe && (
+        <div className="statline log-loss">
+          ⚰ last wipe at {mmss(entry.lastWipe.atMs)}
+          {entry.lastWipe.deadName && entry.lastWipe.killedBy
+            ? ` — ${entry.lastWipe.killedBy.replace(/-/g, ' ')} killed ${entry.lastWipe.deadName}`
+            : entry.lastWipe.bossHpPctLeft !== undefined
+              ? ` — boss at ${Math.round(entry.lastWipe.bossHpPctLeft)}%`
+              : ''}
+        </div>
+      )}
+      {famChips.length > 0 && (
+        <div className="statline muted">
+          Familiarity: {famChips.map((c) => `${c.name} +${c.bonus} discipline`).join(' · ')}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * The Ember Forge (phase 4): the locked door in the Cinder Wastes. Encounters
  * unlock linearly (trash gates the first boss, Slagmaw gates Vulkan);
- * attempts — wipes included — are how the journal will learn each boss
- * (slice 4). Pulls run the full trinity: Borin, Seren and Elara.
+ * attempts — wipes included — feed the boss journal and the roster's
+ * familiarity. Pulls run the full trinity: Borin, Seren and Elara.
  */
 export function DungeonPanel() {
   const unlocks = useStore((s) => s.unlocks);
   const dungeonCleared = useStore((s) => s.dungeonCleared);
   const attempts = useStore((s) => s.attempts);
+  const journal = useStore((s) => s.journal);
   const pullEncounter = useStore((s) => s.pullEncounter);
   const dungeon = useMemo(() => makeEmberForge(), []);
 
@@ -72,6 +145,7 @@ export function DungeonPanel() {
                     }`
                   : 'never attempted'}
             </div>
+            {enc.kind === 'boss' && !gated && <JournalCard boss={enc.boss} entry={journal[enc.id]} />}
           </div>
         );
       })}

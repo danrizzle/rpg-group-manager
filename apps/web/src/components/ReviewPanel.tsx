@@ -1,5 +1,6 @@
-import { levelForXp } from '@rpg/engine';
-import { simIsStale, useStore } from '../store';
+import { encounterById, explorationPct, makeEmberForge } from '@rpg/engine';
+import { useMemo } from 'react';
+import { buildSimRequest, simIsStale, useStore } from '../store';
 import { SIM_TARGETS } from '../sim/bosses';
 import { mmss } from '../fight/replay';
 import { Histogram } from './Histogram';
@@ -29,10 +30,31 @@ export function ReviewPanel() {
   const simTarget = useStore((s) => s.simTarget);
   const setSimTarget = useStore((s) => s.setSimTarget);
   const unlocks = useStore((s) => s.unlocks);
+  const roster = useStore((s) => s.roster);
+  const journal = useStore((s) => s.journal);
+  const familiarity = useStore((s) => s.familiarity);
   const stale = simIsStale(
-    sim, stance, behavior, gear, levelForXp(xp), talents, equippedConsumables, simTarget,
+    sim,
+    buildSimRequest(
+      { stance, behavior, gear, xp, talents, equippedConsumables, simTarget, roster, journal, familiarity },
+      0,
+    ),
   );
   const r = sim.result;
+
+  const dungeon = useMemo(() => makeEmberForge(), []);
+  // Dungeon bosses join the dummy once attempted — the sim runs only what the
+  // journal has revealed (GDD §4).
+  const dungeonTargets = dungeon.encounters
+    .filter((e) => e.kind === 'boss' && (journal[e.id]?.attempts ?? 0) > 0)
+    .map((e) => ({ id: e.id, name: e.name }));
+  const allTargets = [...SIM_TARGETS, ...dungeonTargets];
+  const targetName = (id: string) => allTargets.find((t) => t.id === id)?.name ?? id;
+  const activeEnc = encounterById(dungeon, simTarget);
+  const explored =
+    activeEnc?.kind === 'boss' && journal[simTarget]
+      ? Math.round(explorationPct(activeEnc.boss, journal[simTarget]!) * 100)
+      : null;
 
   return (
     <section className="panel">
@@ -41,7 +63,7 @@ export function ReviewPanel() {
       <div className="control">
         <div className="control-label">Simulate against</div>
         <div className="segmented">
-          {SIM_TARGETS.map((t) => {
+          {allTargets.map((t) => {
             // Same reachability as the world map's Challenge buttons.
             const locked = t.id === 'emberwing' && !unlocks.bridgeBuilt;
             return (
@@ -57,6 +79,12 @@ export function ReviewPanel() {
             );
           })}
         </div>
+        {explored !== null && (
+          <div className="control-desc">
+            party sim vs the journal's knowledge — {explored}% explored; unknown mechanics won't
+            appear
+          </div>
+        )}
       </div>
       <div className="sim-actions">
         {[1000, 5000].map((n) => (
@@ -73,8 +101,9 @@ export function ReviewPanel() {
           <div className="hero">
             <div className="hero-number">{(r.killRate * 100).toFixed(1)}%</div>
             <div className="hero-label">
-              vs {SIM_TARGETS.find((t) => t.id === r.request.bossId)?.name ?? r.request.bossId} —
-              damage check passed in {Math.round(r.killRate * r.iterations).toLocaleString()} of{' '}
+              vs {targetName(r.request.bossId)}
+              {r.request.encounter ? ' (known mechanics only)' : ''} — damage check passed in{' '}
+              {Math.round(r.killRate * r.iterations).toLocaleString()} of{' '}
               {r.iterations.toLocaleString()} runs
             </div>
           </div>
