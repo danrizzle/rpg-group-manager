@@ -249,7 +249,7 @@ As of July 2026.
         In-browser: Slagmaw wipe at 2:38 produced "67% explored, ✓ eruption
         ✓ movement, ? ———, ⚰ melee killed Seren, +2 discipline each"; party
         dummy sim showed 84.5% "(known mechanics only)".
-  - [ ] **Slice 5 — Boss plan timeline + group CDs + hold DPS (engine +
+  - [x] **Slice 5 — Boss plan timeline + group CDs + hold DPS (engine +
         web).** Engine `model/plan.ts`: declarative `BossPlan` — triggers
         (pull, time, boss-cast, phase, boss-HP-below) × actions (fire
         ability/group CD, switch a character's named stance/target step,
@@ -263,8 +263,30 @@ As of July 2026.
         building blocks** (knowledge → levers: only discovered casts/phases
         are offered as triggers), plans persisted per boss (v8), dummy sim
         honors the plan vs the redacted boss.
+        **Landed:** `model/plan.ts` (PlanTrigger pull/time/bossCast/phase/
+        bossHpBelow × PlanAction ability/stance/holdDps + `TimedCall` +
+        `sanitizePlan`), `sim/planRunner.ts` (reaction-time-delayed
+        execution, fizzle-on-cooldown, `planAction` stream events; NO extra
+        RNG — reaction time is deterministic, so no fork needed), Fight
+        hooks (`noteBossCast`, phase hooks, fire-once HP triggers), per-char
+        `holding` gates damage abilities + burst in the decision brain;
+        `save-for-plan-window` now real (auto-burst suppressed, plans/calls
+        fire bursts). **Calls are engine-complete** (timed plan actions;
+        past-identity property tested: appending a call changes nothing
+        before its moment) — slice 6 is web-only. **Vulkan redesigned into
+        the hold-DPS showcase** (see balance below): 25% execute phase,
+        wave cadence == blast cadence (45 s) so the entry moment phase-locks
+        every later overlap. Web: plans persisted (v8), PlanPanel editor
+        (journal-gated triggers, curated action palette incl. Battle Shout /
+        Divine Hymn / Shield Wall / bursts / target switches / Stop-Push),
+        pull + dummy sim run the sanitized plan, PLAN/CALL lines in the
+        combat log, Elara's Burst-CD intent selectable at L7. 9 new tests
+        (126 green); all 7 solo baselines byte-identical. Verified
+        in-browser: plan built in the editor → persisted → "PLAN — Push!"
+        in the live log → kill.
   - [ ] **Slice 6 — Live calls + tactical pause + call→plan adoption (web +
-        engine).** Engine: `FightSetup.calls?: TimedCall[]` — plan actions
+        engine). ← NEXT (engine part is already done, see slice-5 notes;
+        remaining work is web-only. Handoff below.)** Engine: `FightSetup.calls?: TimedCall[]` — plan actions
         fired at a wall time, same arsenal as the plan (§3 ground rule 1),
         same reaction-time machinery, `call` events in the stream. Web:
         dungeon pulls run in live mode — playback locked to the frontier,
@@ -296,16 +318,23 @@ Well-Drilled +5 discipline). `--n 400`, seed 42, CLI stance defaults
 | Slagmaw | starter | 62.7% | the gear wall |
 | Slagmaw | starter + ward,potion each | **93.8%** | preparation buys earliness (§6) |
 | Slagmaw | resist sets | 99.5% | fire-resist chests are the gear answer in anger |
-| Vulkan | default | **97.0%** | Normal law holds |
-| Vulkan | starter | 46.3% | phase-2 overlap kills (melee/sentries 95% of deaths) — hold-DPS plan is the slice-5 knowledge answer |
-| Vulkan | starter + ward,potion each | 98.8% | ward counters sentry fire melee + blasts |
+| Vulkan (slice-5 redesign) | default, no plan | **96.3%** | Normal law holds |
+| Vulkan | default + hold plan | 97.3% | plan is a bonus, not the ticket in (Law 2) |
+| Vulkan | starter, no plan | 60.0% | the entry-timing lottery (28% kill in the death valley vs 75–78% outside — measured over 600 runs) |
+| Vulkan | starter + hold plan | **83.0%** | **knowledge buys the early kill** (§2): hold at 28%, push on Forge Blast |
+| Vulkan | starter + hold at 30% (wrong threshold) | 49% | plan precision is the depth — sweep thresholds for free on the dummy |
 
 Slagmaw numbers: hp 62k, melee 300/2.0s phys, Molten Eruption 700 fire
 party-wide /35s, surges 420, enrage 6:00 (backstop; TTK ~4:22).
-Vulkan: hp 55k, melee 150/2.1s, Forge Blast 450 fire party-wide /45s,
-phase 2 at 50%: 2× Molten Sentry (1.5k HP, 45 fire/1.8s) per 35s wave,
-tantrum ×1.7 after 25s. Sentries spawn onto the healer (heal aggro) until
-the tank Thunder Claps — visible in streams, tested.
+Vulkan (slice-5 redesign): hp 55k, melee 120/2.1s, Forge Blast 700 fire
+party-wide /45s (first 30s), **execute phase at 25%**: 3× Molten Sentry
+(1.1k HP, 85 phys/1.8s) per wave, **waveEveryMs 45s == blast cadence** —
+the gap between phase entry and the next blast repeats every cycle, so
+entering just after a blast keeps every wave in a calm window while
+pushing in blind can lock EVERY wave onto a blast (fresh sentries chew
+the healer via heal aggro, the blast finishes her). Tantrum ×1.7 after
+25s. Slagmaw's knowledge lever is journal-informed preparation (wards)
+plus heal-CD micro (+1%); Vulkan carries the plan showcase.
 
 ## Balance state (Cinder Maw, current numbers — slice 5 retune)
 
@@ -402,6 +431,48 @@ Known gaps / deferred items:
   sunleaf (~50 game-min of gathering). All placeholder-tunable in
   `world/professions.ts`.
 
+## Phase 4 — HANDOFF: slice 6 remains (live calls, web-only)
+
+Slices 1–5 are landed, committed one commit per slice, all green (126
+engine tests; web builds; solo CLI baselines byte-identical throughout).
+What remains for phase-4 completion is **slice 6, web only** — the engine
+side (TimedCall, executor, past-identity guarantee) shipped in slice 5:
+
+1. **Live mode for dungeon pulls**: playback locked to the frontier (no
+   scrubbing/seeking ahead, no End button until the fight resolves once),
+   tactical pause = pause button (already exists).
+2. **Call palette** (2–3 buttons, Law 1): "All CDs now!" (battle-shout +
+   combustion + pyroclasm ability actions for their owners), "Heal CD
+   now!" (priest divine-hymn), "Stop damage!/Push!" (holdDps toggle).
+   Issuing a call at playT: append `{atMs: playT, action}` to the fight's
+   call list and re-run `runFight` with the same seed + calls (store
+   needs to keep the pull's inputs — party defs are in FightState.party;
+   ALSO keep the plan + setup so the re-run is exact). Events before the
+   call moment are guaranteed identical (tested in plan.test.ts), so
+   replace fight.result, keep playT, resume.
+   Careful: consumable deduction and journal/familiarity/attempts were
+   already recorded at pull time — on re-run, RECONCILE: recompute
+   potion-charge consumption + journal from the FINAL stream (store the
+   pre-pull inventory/journal snapshot in FightState, or defer all
+   recording until the fight is watched/ends — deferring is cleaner and
+   matches the "watched kill unlocks" pattern).
+3. **Call→plan adoption** (§3 ground rule 2): in the post-fight review,
+   list `planAction` events with `origin: 'call'`; "adopt" converts each
+   to a plan entry — anchor to the nearest DISCOVERED bossCast within
+   ~8 s before the call, else a `time` trigger at its atMs; append to
+   `plans[encounterId]`.
+4. STATUS: mark slice 6 + phase 4 complete, walkthrough + migration
+   check (no schema change expected — plans/journal already exist; bump
+   only if FightState persistence changes, which it should NOT — fight
+   stays unpersisted).
+
+Known seams: `FightView` gates `recordBossKill`/`recordEncounterCleared`
+on `view.ended === 'kill'` — in live mode that effect must fire only when
+the frontier reaches the end naturally. `pullEncounter` currently records
+attempts/journal/consumption eagerly at pull time (see #2). The engine's
+`planAction` meta carries `origin`/`kind`/`charId`/`abilityId`/`hold` —
+everything adoption needs.
+
 ## Phase 4 — autonomous design decisions (morning review)
 
 Decisions taken overnight without user input; each lists the rejected
@@ -484,6 +555,37 @@ alternative. Grouped by slice as they land.
   members are at cap and dungeon reward loops (loot) are phase-5 scope;
   trash is a time/consumable cost, not a farm. Rejected: XP-bearing
   trash (nothing to spend it on at cap 10).
+
+**Slice 5 (boss plan + group CDs + hold DPS):**
+
+- **Vulkan was redesigned around a phase-locked overlap** after MC
+  diagnosis showed the original "50% add phase + drifting blast timer"
+  made hold-DPS worthless (overlaps recurred regardless of entry timing;
+  holding was pure attrition — plan made things WORSE, 46→43%). Fix:
+  execute phase at 25% + wave cadence equal to blast cadence, which makes
+  the entry moment decide the whole endgame. Measured: entries 10–20 s
+  after a blast kill 28%, entries 0–10 s kill 75%. Rejected: new engine
+  mechanics (e.g. scripted "overlap" abilities) — the interplay is pure
+  tuning on existing types 1–3, as §4 demands.
+- **The hold plan's threshold sensitivity (28% → +23 pts, 30% → −11 pts)
+  is kept as the depth**, discoverable for free on the dummy (plans run
+  in the sim vs the redacted boss). The HP-step list in the editor is
+  deliberately fine-grained near the phase. Rejected: softening the
+  valley until any threshold works (would flatten the only deep
+  knowledge lever in the dungeon).
+- **Plan execution adds no RNG** — reaction time is a deterministic
+  function of discipline, so live-call re-runs (slice 6) reproduce the
+  past exactly; a mistake roll on plan compliance was rejected (it would
+  perturb the main RNG stream and add variance where §3 wants levers).
+- **Plan actions are a curated palette** (9 options) rather than a free
+  char × ability × stance matrix. Sanitized against the real party at
+  pull/sim time either way. Rejected: full matrix UI (list-maintenance
+  feel the GDD explicitly bans).
+- **`bossHpBelow` triggers are always available** (boss HP is on the bars
+  from pull one); journal knowledge gates cast/phase triggers only.
+- **Live-call machinery landed engine-side this slice** (TimedCall =
+  plan action at a moment; past-identity property under appended calls
+  is tested) so slice 6 is purely web work.
 
 **Slice 4 (journal + discovery + familiarity):**
 

@@ -90,7 +90,7 @@ export function makeVulkan(overrides?: Partial<BossDefinition>): BossDefinition 
     id: 'vulkan',
     name: 'Forgemaster Vulkan',
     hp: 55_000,
-    meleeDamage: 150,
+    meleeDamage: 120,
     meleeSwingMs: 2100,
     meleeDamageType: 'physical',
 
@@ -103,7 +103,7 @@ export function makeVulkan(overrides?: Partial<BossDefinition>): BossDefinition 
         name: 'Forge Blast',
         firstAtMs: 30_000,
         everyMs: 45_000,
-        damage: 450,
+        damage: 700,
         damageType: 'fire',
       },
     ],
@@ -117,11 +117,15 @@ export function makeVulkan(overrides?: Partial<BossDefinition>): BossDefinition 
       failDamageType: 'fire',
     },
 
+    // Wave cadence == blast cadence: the gap between "phase entered" and
+    // "next blast" repeats every cycle. Enter just after a blast and every
+    // wave spawns into a calm window; push in blindly at the wrong moment
+    // and EVERY wave overlaps a blast — hold DPS is the knowledge answer.
     addPhase: {
-      atHpPct: 50,
-      waveEveryMs: 35_000,
-      addsPerWave: 2,
-      add: { name: 'Molten Sentry', hp: 1500, meleeDamage: 45, meleeSwingMs: 1800 },
+      atHpPct: 25,
+      waveEveryMs: 45_000,
+      addsPerWave: 3,
+      add: { name: 'Molten Sentry', hp: 1100, meleeDamage: 85, meleeSwingMs: 1800 },
       tantrumAfterMs: 25_000,
       tantrumDamageMult: 1.7,
     },

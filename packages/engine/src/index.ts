@@ -59,6 +59,8 @@ export { makePriest, priestBaseForLevel } from './content/classes/priest';
 export { applyComp, unlockedGroupCds } from './model/comp';
 export type { CompPassiveDefinition, GroupCdDefinition } from './model/comp';
 export { GROUP_CDS, COMP_PASSIVES } from './content/groupCds';
+export { sanitizePlan } from './model/plan';
+export type { BossPlan, PlanAction, PlanEntry, PlanTrigger, TimedCall } from './model/plan';
 export {
   EMPTY_KNOWLEDGE,
   discover,

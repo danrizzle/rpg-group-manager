@@ -9,6 +9,7 @@ import {
 import { useMemo } from 'react';
 import { mmss } from '../fight/replay';
 import { ROSTER_CHARS, useStore, type JournalEntry } from '../store';
+import { PlanPanel } from './PlanPanel';
 
 const secs = (ms: number) => `${Math.round(ms / 1000)} s`;
 
@@ -145,7 +146,14 @@ export function DungeonPanel() {
                     }`
                   : 'never attempted'}
             </div>
-            {enc.kind === 'boss' && !gated && <JournalCard boss={enc.boss} entry={journal[enc.id]} />}
+            {enc.kind === 'boss' && !gated && (
+              <>
+                <JournalCard boss={enc.boss} entry={journal[enc.id]} />
+                {(journal[enc.id]?.attempts ?? 0) > 0 && (
+                  <PlanPanel boss={enc.boss} journalEntry={journal[enc.id]} />
+                )}
+              </>
+            )}
           </div>
         );
       })}

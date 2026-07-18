@@ -47,6 +47,7 @@ export function installBoss(fight: Fight): void {
     const fire = () => {
       if (fight.ended !== null || !boss.alive) return;
       fight.emit({ type: 'castEnd', source: BOSS_ID, meta: { abilityId: timed.id } });
+      fight.noteBossCast(timed.id);
       for (const c of fight.livingChars()) {
         fight.damageChar(c, timed.damage * bossDamageMult(), timed.damageType, BOSS_ID, {
           abilityId: timed.id,

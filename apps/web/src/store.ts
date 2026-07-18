@@ -21,8 +21,10 @@ import {
   talentPointsForLevel,
   unlockedControls,
   fightReview,
+  sanitizePlan,
   type BossDefinition,
   type BossKnowledge,
+  type BossPlan,
   type CharacterDef,
   type ConsumableDefinition,
   type FightResult,
@@ -248,7 +250,7 @@ export function buildSimRequest(
   s: Pick<
     Store,
     | 'stance' | 'behavior' | 'gear' | 'xp' | 'talents' | 'equippedConsumables'
-    | 'simTarget' | 'roster' | 'journal' | 'familiarity'
+    | 'simTarget' | 'roster' | 'journal' | 'familiarity' | 'plans'
   >,
   iterations: number,
 ): SimRequest {
@@ -285,6 +287,7 @@ export function buildSimRequest(
               },
             },
             familiarity: { warrior: fam('warrior'), priest: fam('priest'), mage: fam('mage') },
+            ...(s.plans[s.simTarget]?.entries.length ? { plan: s.plans[s.simTarget] } : {}),
           },
         }
       : {}),
@@ -382,6 +385,9 @@ interface Store {
   journal: Record<string, JournalEntry>;
   /** Familiarity: char id → boss/encounter id → attempts (persisted). */
   familiarity: Record<string, Record<string, number>>;
+  /** Boss plans (GDD §4): encounter id → timeline of reactions (persisted). */
+  plans: Record<string, BossPlan>;
+  setPlan: (encounterId: string, plan: BossPlan) => void;
 
   // --- replay playback clock ---
   playT: number;
@@ -693,6 +699,9 @@ export const useStore = create<Store>()(
         dungeonCleared: {},
         journal: {},
         familiarity: {},
+        plans: {},
+        setPlan: (encounterId, plan) =>
+          set((s) => ({ plans: { ...s.plans, [encounterId]: plan } })),
         recordEncounterCleared: (encounterId) =>
           set((s) =>
             s.dungeonCleared[encounterId]
@@ -755,9 +764,15 @@ export const useStore = create<Store>()(
             { character: defs[2]!, stance: { ...stance } },
           ];
           const seed = Math.floor(Math.random() * 2 ** 31);
+          // The boss plan rides along on boss pulls (sanitized against the
+          // actual party — persisted plans survive content changes).
+          const plan =
+            enc.kind === 'boss' && get().plans[encounterId]
+              ? sanitizePlan(get().plans[encounterId]!, defs)
+              : undefined;
           const setup =
             enc.kind === 'boss'
-              ? { party, boss: enc.boss, seed }
+              ? { party, boss: enc.boss, seed, ...(plan?.entries.length ? { plan } : {}) }
               : { party, pack: enc.pack, seed };
           const result = runFight(setup);
           const review = fightReview(result, setup);
@@ -1071,7 +1086,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 7,
+      version: 8,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
@@ -1084,6 +1099,7 @@ export const useStore = create<Store>()(
         dungeonCleared: s.dungeonCleared,
         journal: s.journal,
         familiarity: s.familiarity,
+        plans: s.plans,
         xp: s.xp,
         region: s.region,
         unlocks: s.unlocks,
@@ -1132,6 +1148,9 @@ export const useStore = create<Store>()(
         // (v7, phase-4 slice 4: journal + familiarity join unconditionally.)
         s.journal = { ...(s.journal ?? {}) };
         s.familiarity = { ...(s.familiarity ?? {}) };
+        // (v8, phase-4 slice 5: boss plans join unconditionally; entries are
+        // sanitized against the real party at pull/sim time, not here.)
+        s.plans = { ...(s.plans ?? {}) };
         // Repair against current content — talent ids may have changed.
         s.talents = sanitizeTalentSelection(
           MAGE_TALENTS,

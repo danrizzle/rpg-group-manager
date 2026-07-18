@@ -33,10 +33,11 @@ export function ReviewPanel() {
   const roster = useStore((s) => s.roster);
   const journal = useStore((s) => s.journal);
   const familiarity = useStore((s) => s.familiarity);
+  const plans = useStore((s) => s.plans);
   const stale = simIsStale(
     sim,
     buildSimRequest(
-      { stance, behavior, gear, xp, talents, equippedConsumables, simTarget, roster, journal, familiarity },
+      { stance, behavior, gear, xp, talents, equippedConsumables, simTarget, roster, journal, familiarity, plans },
       0,
     ),
   );

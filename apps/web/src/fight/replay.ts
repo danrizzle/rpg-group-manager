@@ -305,6 +305,20 @@ export function buildLog(events: readonly CombatEvent[], cfg: ReplayConfig): Log
       case 'movementStart':
         push(e.t, `The ground erupts — move out!`, 'system');
         break;
+      case 'planAction': {
+        const origin = e.meta?.['origin'] === 'call' ? 'CALL' : 'PLAN';
+        const kind = String(e.meta?.['kind']);
+        const text =
+          kind === 'holdDps'
+            ? e.meta?.['hold'] === true
+              ? 'Stop damage!'
+              : 'Push!'
+            : kind === 'ability'
+              ? `${actorName(String(e.meta?.['charId']))}: ${names[String(e.meta?.['abilityId'])] ?? e.meta?.['abilityId']}!`
+              : `${actorName(String(e.meta?.['charId']))}: switch stance!`;
+        push(e.t, `${origin} — ${text}`, 'system');
+        break;
+      }
       case 'death':
         push(e.t, `${actorName(e.source)} dies`, playerIds.has(e.source) ? 'mistake' : 'system');
         break;

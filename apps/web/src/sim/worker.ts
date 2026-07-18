@@ -17,7 +17,9 @@ import {
   packBandMax,
   redactBoss,
   runMonteCarlo,
+  sanitizePlan,
   type BossKnowledge,
+  type BossPlan,
   type GearSlot,
   type GrindRates,
   type Item,
@@ -58,6 +60,8 @@ export interface EncounterSimInput {
   roster: { warrior: RosterBuildInput; priest: RosterBuildInput };
   /** Familiarity bonus discipline per char id (warrior/priest/mage). */
   familiarity: Record<string, number>;
+  /** The boss plan — the dummy tests plans against known mechanics (GDD §4). */
+  plan?: BossPlan;
 }
 
 export interface SimRequest {
@@ -154,7 +158,15 @@ function runSim(req: SimRequest): SimResponse {
     const enc = encounterById(makeEmberForge(), req.encounter.id);
     if (!enc || enc.kind !== 'boss') throw new Error(`unknown boss encounter '${req.encounter.id}'`);
     // The dummy simulates ONLY what the journal knows (GDD §4).
-    setup = { party: buildParty(req), boss: redactBoss(enc.boss, req.encounter.knowledge) };
+    const party = buildParty(req);
+    const plan = req.encounter.plan
+      ? sanitizePlan(req.encounter.plan, party.map((m) => m.character))
+      : undefined;
+    setup = {
+      party,
+      boss: redactBoss(enc.boss, req.encounter.knowledge),
+      ...(plan?.entries.length ? { plan } : {}),
+    };
   } else {
     setup = {
       player: makeMage(req.behavior, resolveItems(req.gear), req.level, req.talents, resolveConsumables(req.consumables)),

@@ -6,6 +6,8 @@ import { Actor } from '../model/actor';
 import type { BossDefinition } from '../model/boss';
 import type { MobDefinition, MobPackDefinition } from '../model/mobPack';
 import type { EquippedConsumable } from '../model/consumable';
+import type { BossPlan, TimedCall } from '../model/plan';
+import { installPlan } from './planRunner';
 import { hasteMult, type BehaviorStats, type CombatStats } from '../model/stats';
 import { validateStance, type StanceConfig } from '../model/stance';
 import { chooseAction, shouldUseBurst, type AllyView } from './decision';
@@ -59,6 +61,10 @@ export interface FightSetup {
   party?: PartyMember[];
   boss?: BossDefinition;
   pack?: MobPackDefinition;
+  /** The boss plan (GDD §4) — absent = auto defaults only (Law 2). */
+  plan?: BossPlan;
+  /** Live calls (GDD §3): plan actions fired at recorded moments. */
+  calls?: TimedCall[];
   seed: number;
 }
 
@@ -106,10 +112,13 @@ export function enemyStats(hp: number): CombatStats {
  */
 export interface CharState {
   def: CharacterDef;
+  /** Mutable — plan/call stance switches repoint it mid-fight. */
   stance: StanceConfig;
   actor: Actor;
   rng: Rng;
   moving: boolean;
+  /** "Stop damage!": true after this character reacted to a hold order. */
+  holding: boolean;
   potionPending: boolean;
   /** abilityId → remaining uses, for abilities with chargesPerFight. */
   chargesLeft: Map<string, number>;
@@ -141,6 +150,22 @@ export class Fight {
   private readonly threat = new Map<string, Map<string, number>>();
   private lastHealer: CharState | null = null;
 
+  // Plan/call trigger hooks (sim/planRunner.ts). Empty when no plan — the
+  // notify calls below are then no-ops, keeping plan-less streams identical.
+  readonly bossCastHooks: ((abilityId: string) => void)[] = [];
+  readonly phaseHooks: ((phase: number) => void)[] = [];
+  private readonly hpTriggers: { pct: number; fn: () => void }[] = [];
+
+  /** Register a fire-once trigger for boss HP dropping below `pct`. */
+  addHpTrigger(pct: number, fn: () => void): void {
+    this.hpTriggers.push({ pct, fn });
+  }
+
+  /** bossScript reports each timeline cast here (plan bossCast triggers). */
+  noteBossCast(abilityId: string): void {
+    for (const hook of this.bossCastHooks) hook(abilityId);
+  }
+
   ended: FightResultKind | null = null;
   enraged = false;
   /** Ids of adds that outlived the tantrum timer and still live. */
@@ -161,11 +186,12 @@ export class Fight {
       validateStance(setup.stance);
       this.chars.push({
         def: setup.player,
-        stance: setup.stance,
+        stance: { ...setup.stance },
         actor: new Actor(PLAYER_ID, setup.player.name, 'players', setup.player.stats),
         // Legacy solo path: the main stream, exactly as before parties.
         rng: this.rng,
         moving: false,
+        holding: false,
         potionPending: false,
         chargesLeft: new Map(),
       });
@@ -181,10 +207,11 @@ export class Fight {
         seen.add(id);
         this.chars.push({
           def: member.character,
-          stance: member.stance,
+          stance: { ...member.stance },
           actor: new Actor(id, member.character.name, 'players', member.character.stats),
           rng: this.rng.fork(`char:${id}`),
           moving: false,
+          holding: false,
           potionPending: false,
           chargesLeft: new Map(),
         });
@@ -242,6 +269,7 @@ export class Fight {
     }
     if (this.setup.boss) installBoss(this);
     else installPack(this);
+    if (this.setup.plan || this.setup.calls) installPlan(this);
     for (const c of this.chars) {
       this.scheduler.at(0, () => this.decide(c));
     }
@@ -315,8 +343,8 @@ export class Fight {
     const { stance, def } = char;
     const kit = def.abilities;
 
-    // Off-GCD burst cooldowns fire outside the cycle.
-    if (shouldUseBurst(stance)) {
+    // Off-GCD burst cooldowns fire outside the cycle (not while holding).
+    if (shouldUseBurst(stance) && !char.holding) {
       for (const a of kit) {
         if (a.offGcd && a.tags.includes('burst') && char.actor.isReady(a, now)) {
           this.resolveAbility(char, a);
@@ -324,8 +352,14 @@ export class Fight {
       }
     }
 
+    // "Stop damage!" (GDD §3): a holding character keeps healing and
+    // defending, but casts nothing that would push the boss.
     const ready = kit.filter(
-      (a) => !a.offGcd && !a.tags.includes('consumable') && char.actor.isReady(a, now),
+      (a) =>
+        !a.offGcd &&
+        !a.tags.includes('consumable') &&
+        (!char.holding || a.effect.kind !== 'damage') &&
+        char.actor.isReady(a, now),
     );
     const allies: AllyView[] | undefined = this.setup.party
       ? this.livingChars().map((c) => ({ id: c.actor.id, hpPct: c.actor.hpPct }))
@@ -518,6 +552,16 @@ export class Fight {
       this.phase = 2;
       this.emit({ type: 'phaseChange', source: BOSS_ID, meta: { phase: 2 } });
       this.onPhase2?.();
+      for (const hook of this.phaseHooks) hook(2);
+    }
+    // Fire-once boss-HP plan triggers (highest thresholds first is not
+    // needed — all crossed thresholds fire this event, in insertion order).
+    const hpPct = this.boss.hpPct * 100;
+    for (let i = this.hpTriggers.length - 1; i >= 0; i--) {
+      if (hpPct < this.hpTriggers[i]!.pct) {
+        const [t] = this.hpTriggers.splice(i, 1);
+        t!.fn();
+      }
     }
   }
 

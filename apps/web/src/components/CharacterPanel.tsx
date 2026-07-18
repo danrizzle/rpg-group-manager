@@ -192,12 +192,19 @@ function ElaraPanel() {
 
       <div className="control">
         <div className="control-label">Burst CDs</div>
-        <select value={stance.burstCds} disabled>
+        <select
+          value={stance.burstCds}
+          disabled={!burstUnlocked}
+          onChange={(e) => setStance({ burstCds: e.target.value as 'automatic' | 'save-for-plan-window' })}
+        >
           <option value="automatic">automatic</option>
-          <option value="save-for-plan-window">
-            {burstUnlocked ? 'save for plan window' : `save for plan window (Lv ${INTENT_LEVEL['burst-cd-control']})`}
-          </option>
+          <option value="save-for-plan-window">save for plan window</option>
         </select>
+        {!burstUnlocked ? (
+          <div className="control-desc">locked — unlocks at level {INTENT_LEVEL['burst-cd-control']}</div>
+        ) : stance.burstCds === 'save-for-plan-window' ? (
+          <div className="control-desc">burst CDs fire only when a plan or call asks for them</div>
+        ) : null}
       </div>
 
       <div className="control">
