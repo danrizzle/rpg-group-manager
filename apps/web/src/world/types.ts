@@ -13,14 +13,19 @@ export type BuildingId = 'workshop' | 'bank';
 export type RegionId = 'heartfield' | 'duskwood' | 'ashen-foothills' | 'cinder-wastes';
 export type ZoneId = RegionId;
 
-/** Zone bosses that gate the next region (fought live in the combat view). */
-export type BossId = 'bandit-warlord' | 'emberwing';
+/** Bosses whose kills gate progression (fought live in the combat view). */
+export type BossId = 'bandit-warlord' | 'emberwing' | 'cinder-maw';
 
 export interface Unlocks {
   banditKilled: boolean;   // → Duskwood
   bridgeBuilt: boolean;    // → Ashen Foothills
   emberwingKilled: boolean; // → Cinder Wastes
+  /** → Ember Forge door + the Borin/Seren recruits (phase 4). */
+  cinderMawKilled: boolean;
 }
+
+/** The two phase-4 recruits; Elara keeps her legacy top-level build fields. */
+export type RosterCharId = 'warrior' | 'priest';
 
 export interface Materials {
   bridgeTimber: number;

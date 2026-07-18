@@ -17,9 +17,10 @@ import {
   type ItemBonuses,
 } from '@rpg/engine';
 import { useMemo } from 'react';
-import { POTION_STEPS, resolveGear, STANCES, TARGET_STEPS, useStore } from '../store';
+import { POTION_STEPS, ROSTER_CHARS, resolveGear, STANCES, TARGET_STEPS, useStore } from '../store';
 import { resolveConsumables } from '../world/professions';
 import { LoadoutPanel } from './LoadoutPanel';
+import { RosterCharacterPanel } from './RosterCharacterPanel';
 import { TalentPanel } from './TalentPanel';
 
 const SLOTS: { slot: GearSlot; label: string }[] = [
@@ -75,7 +76,7 @@ function DevSlider(props: {
   );
 }
 
-export function CharacterPanel() {
+function ElaraPanel() {
   const stance = useStore((s) => s.stance);
   const behavior = useStore((s) => s.behavior);
   const setStance = useStore((s) => s.setStance);
@@ -113,7 +114,7 @@ export function CharacterPanel() {
   const xpPct = atCap ? 100 : Math.max(0, Math.min(100, (into / span) * 100));
 
   return (
-    <section className="panel">
+    <>
       <h2>Elara the Mage</h2>
       <div className="statline">
         Level {level}
@@ -218,7 +219,7 @@ export function CharacterPanel() {
           <div className="control-label">{label}</div>
           <select value={gear[slot]} onChange={(e) => setGear(slot, e.target.value)}>
             <option value="">— empty —</option>
-            {itemsForSlot(slot).map((item) => (
+            {itemsForSlot(slot, 'mage').map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name} (t{item.tier}) — {bonusText(item.bonuses)}
               </option>
@@ -316,6 +317,52 @@ export function CharacterPanel() {
       )}
 
       <LoadoutPanel />
+    </>
+  );
+}
+
+/**
+ * Character panel with a roster switcher (phase 4): Elara keeps the full
+ * legacy panel (talents, loadouts, dev sliders); the recruits get their own
+ * build panels once Cinder Maw has fallen.
+ */
+export function CharacterPanel() {
+  const activeChar = useStore((s) => s.activeChar);
+  const setActiveChar = useStore((s) => s.setActiveChar);
+  const recruited = useStore((s) => s.unlocks.cinderMawKilled);
+  const meta = ROSTER_CHARS.find((c) => c.id === activeChar);
+
+  return (
+    <section className="panel">
+      {recruited && (
+        <div className="segmented" style={{ marginBottom: '0.5rem' }}>
+          <button
+            className={`btn btn-small ${activeChar === 'elara' ? 'btn-active' : ''}`}
+            onClick={() => setActiveChar('elara')}
+          >
+            Elara
+          </button>
+          {ROSTER_CHARS.map((c) => (
+            <button
+              key={c.id}
+              className={`btn btn-small ${activeChar === c.id ? 'btn-active' : ''}`}
+              onClick={() => setActiveChar(c.id)}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {meta && recruited ? (
+        <>
+          <h2>
+            {meta.name} the {meta.classLabel}
+          </h2>
+          <RosterCharacterPanel charId={meta.id} />
+        </>
+      ) : (
+        <ElaraPanel />
+      )}
     </section>
   );
 }

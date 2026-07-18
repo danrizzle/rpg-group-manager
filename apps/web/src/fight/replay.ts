@@ -1,21 +1,26 @@
 import {
   BOSS_ID,
+  CONSUMABLES_BY_ID,
   PLAYER_ID,
   type BossDefinition,
   type CharacterDef,
   type CombatEvent,
+  type MobPackDefinition,
 } from '@rpg/engine';
 
 /**
  * Presentation layer = pure consumer of the event stream (GDD §3).
  * Reconstructs bars/buffs/casts at any time t from events alone — the
  * proof that replays and richer views later need nothing more.
+ * Party-generalized (phase 4): any number of players (ids must match the
+ * stream — solo streams use PLAYER_ID), boss or pack enemies.
  */
 
 export interface ActorView {
   id: string;
   name: string;
   side: 'players' | 'enemies';
+  role?: string;
   hp: number;
   maxHp: number;
   alive: boolean;
@@ -40,9 +45,11 @@ export interface LogLine {
   cls: 'dealt' | 'taken' | 'heal' | 'mistake' | 'system' | 'buff';
 }
 
-interface ReplayConfig {
-  player: CharacterDef;
-  boss: BossDefinition;
+export interface ReplayConfig {
+  /** In fight order; ids must match the stream (solo: [{...def, id: PLAYER_ID}]). */
+  players: CharacterDef[];
+  boss?: BossDefinition;
+  pack?: MobPackDefinition;
 }
 
 export class Replay {
@@ -55,12 +62,16 @@ export class Replay {
   private ended: string | null = null;
   private lastT = -1;
   private castTimes: Record<string, number>;
+  private playerIds: Set<string>;
 
   constructor(
     private events: readonly CombatEvent[],
     private cfg: ReplayConfig,
   ) {
-    this.castTimes = Object.fromEntries(cfg.player.abilities.map((a) => [a.id, a.castTimeMs]));
+    this.castTimes = Object.fromEntries(
+      cfg.players.flatMap((p) => p.abilities.map((a) => [a.id, a.castTimeMs])),
+    );
+    this.playerIds = new Set(cfg.players.map((p) => p.id ?? PLAYER_ID));
     this.reset();
   }
 
@@ -72,26 +83,44 @@ export class Replay {
     this.phase = 1;
     this.ended = null;
     this.actors = new Map();
-    this.actors.set(PLAYER_ID, {
-      id: PLAYER_ID,
-      name: this.cfg.player.name,
-      side: 'players',
-      hp: this.cfg.player.stats.maxHp,
-      maxHp: this.cfg.player.stats.maxHp,
-      alive: true,
-      buffs: [],
-      casting: null,
-    });
-    this.actors.set(BOSS_ID, {
-      id: BOSS_ID,
-      name: this.cfg.boss.name,
-      side: 'enemies',
-      hp: this.cfg.boss.hp,
-      maxHp: this.cfg.boss.hp,
-      alive: true,
-      buffs: [],
-      casting: null,
-    });
+    for (const p of this.cfg.players) {
+      const id = p.id ?? PLAYER_ID;
+      this.actors.set(id, {
+        id,
+        name: p.name,
+        side: 'players',
+        ...(p.role ? { role: p.role } : {}),
+        hp: p.stats.maxHp,
+        maxHp: p.stats.maxHp,
+        alive: true,
+        buffs: [],
+        casting: null,
+      });
+    }
+    if (this.cfg.boss) {
+      this.actors.set(BOSS_ID, {
+        id: BOSS_ID,
+        name: this.cfg.boss.name,
+        side: 'enemies',
+        hp: this.cfg.boss.hp,
+        maxHp: this.cfg.boss.hp,
+        alive: true,
+        buffs: [],
+        casting: null,
+      });
+    }
+    for (const mob of this.cfg.pack?.mobs ?? []) {
+      this.actors.set(mob.id, {
+        id: mob.id,
+        name: mob.name,
+        side: 'enemies',
+        hp: mob.hp,
+        maxHp: mob.hp,
+        alive: true,
+        buffs: [],
+        casting: null,
+      });
+    }
   }
 
   seek(t: number): ViewState {
@@ -101,7 +130,6 @@ export class Replay {
       this.apply(this.events[this.idx]!);
       this.idx++;
     }
-    // Adds that died stay listed briefly is a UI concern; keep dead adds.
     return {
       t,
       actors: [...this.actors.values()].map((a) => ({ ...a, buffs: [...a.buffs] })),
@@ -118,11 +146,14 @@ export class Replay {
     const src = this.actors.get(e.source);
     const tgt = e.target ? this.actors.get(e.target) : undefined;
     switch (e.type) {
+      case 'join':
+        // Roster is prebuilt from cfg; joins carry no extra state.
+        break;
       case 'damage':
         if (tgt) {
           tgt.hp = Math.max(0, tgt.hp - (e.value ?? 0));
         }
-        if (e.source === PLAYER_ID) this.damageDone += e.value ?? 0;
+        if (this.playerIds.has(e.source)) this.damageDone += e.value ?? 0;
         break;
       case 'heal':
         if (tgt) tgt.hp = Math.min(tgt.maxHp, tgt.hp + (e.value ?? 0));
@@ -146,18 +177,21 @@ export class Replay {
         if (tgt) tgt.buffs = tgt.buffs.filter((b) => b !== buffId);
         break;
       }
-      case 'addSpawn':
+      case 'addSpawn': {
+        if (this.actors.has(e.source)) break; // pack mobs are prebuilt
+        const hp = this.cfg.boss?.addPhase.add.hp ?? 1;
         this.actors.set(e.source, {
           id: e.source,
           name: String(e.meta?.['name'] ?? 'Add'),
           side: 'enemies',
-          hp: this.cfg.boss.addPhase.add.hp,
-          maxHp: this.cfg.boss.addPhase.add.hp,
+          hp,
+          maxHp: hp,
           alive: true,
           buffs: [],
           casting: null,
         });
         break;
+      }
       case 'death':
         if (src) {
           src.alive = false;
@@ -193,21 +227,32 @@ const mmss = (ms: number) => {
 /** Precompute human-readable log lines for the whole stream. */
 export function buildLog(events: readonly CombatEvent[], cfg: ReplayConfig): LogLine[] {
   const names: Record<string, string> = { melee: 'Melee', 'lava-surge': 'Lava Surge' };
-  for (const a of cfg.player.abilities) names[a.id] = a.name;
-  for (const t of cfg.boss.timeline) names[t.id] = t.name;
+  for (const [id, c] of Object.entries(CONSUMABLES_BY_ID)) names[id] = c.name;
+  for (const p of cfg.players) for (const a of p.abilities) names[a.id] = a.name;
+  for (const t of cfg.boss?.timeline ?? []) names[t.id] = t.name;
   const abilityName = (e: CombatEvent) => names[String(e.meta?.['abilityId'] ?? '')] ?? 'Attack';
+
+  const playerIds = new Set(cfg.players.map((p) => p.id ?? PLAYER_ID));
+  const actorNames: Record<string, string> = {};
+  for (const p of cfg.players) actorNames[p.id ?? PLAYER_ID] = p.name;
+  if (cfg.boss) actorNames[BOSS_ID] = cfg.boss.name;
+  for (const mob of cfg.pack?.mobs ?? []) actorNames[mob.id] = mob.name;
   const actorName = (id: string | undefined) =>
-    id === PLAYER_ID ? cfg.player.name : id === BOSS_ID ? cfg.boss.name : cfg.boss.addPhase.add.name;
+    (id !== undefined && actorNames[id]) || cfg.boss?.addPhase.add.name || 'Add';
 
   const lines: LogLine[] = [];
   const push = (t: number, text: string, cls: LogLine['cls']) => lines.push({ t, text, cls });
 
   for (const e of events) {
     switch (e.type) {
+      case 'addSpawn':
+        actorNames[e.source] = String(e.meta?.['name'] ?? actorName(e.source));
+        push(e.t, `${actorNames[e.source]} joins the fight`, 'system');
+        break;
       case 'damage': {
         const crit = e.meta?.['crit'] === true ? ' (crit!)' : '';
-        if (e.source === PLAYER_ID) {
-          push(e.t, `${abilityName(e)} hits ${actorName(e.target)} for ${e.value}${crit}`, 'dealt');
+        if (playerIds.has(e.source)) {
+          push(e.t, `${actorName(e.source)}'s ${abilityName(e)} hits ${actorName(e.target)} for ${e.value}${crit}`, 'dealt');
         } else {
           const absorbed = Number(e.meta?.['absorbed'] ?? 0);
           const suffix = absorbed > 0 ? ` (${absorbed} absorbed)` : '';
@@ -215,53 +260,63 @@ export function buildLog(events: readonly CombatEvent[], cfg: ReplayConfig): Log
         }
         break;
       }
-      case 'heal':
-        push(e.t, `${abilityName(e)} restores ${e.value} HP`, 'heal');
+      case 'heal': {
+        const toOther = e.target !== undefined && e.target !== e.source;
+        push(
+          e.t,
+          `${abilityName(e)} restores ${e.value} HP${toOther ? ` to ${actorName(e.target)}` : ''}`,
+          'heal',
+        );
         break;
+      }
       case 'mistake': {
         const kind = String(e.meta?.['kind']);
+        const who = actorName(e.source);
         const text =
           kind === 'stayed-in-fire'
-            ? `${cfg.player.name} stands in the fire!`
+            ? `${who} stands in the fire!`
             : kind === 'wrong-ability'
-              ? `Mistake: cast ${names[String(e.meta?.['chose'])] ?? '?'} instead of ${names[String(e.meta?.['insteadOf'])] ?? '?'}`
+              ? `${who} mistake: cast ${names[String(e.meta?.['chose'])] ?? '?'} instead of ${names[String(e.meta?.['insteadOf'])] ?? '?'}`
               : kind === 'hesitation'
-                ? `Mistake: hesitates for ${((Number(e.meta?.['delayMs']) || 0) / 1000).toFixed(1)}s`
-                : `Mistake: fumbles for the potion (+${((Number(e.meta?.['delayMs']) || 0) / 1000).toFixed(1)}s)`;
+                ? `${who} hesitates for ${((Number(e.meta?.['delayMs']) || 0) / 1000).toFixed(1)}s`
+                : `${who} fumbles for the potion (+${((Number(e.meta?.['delayMs']) || 0) / 1000).toFixed(1)}s)`;
         push(e.t, text, 'mistake');
         break;
       }
       case 'buffApplied':
         if (e.meta?.['buffId'] === 'tantrum') {
-          push(e.t, `${cfg.boss.name} flies into a TANTRUM — adds are overdue!`, 'mistake');
-        } else {
+          push(e.t, `${actorName(BOSS_ID)} flies into a TANTRUM — adds are overdue!`, 'mistake');
+        } else if (e.meta?.['consumable'] !== true || e.t > 0) {
           push(e.t, `${actorName(e.target)} gains ${names[String(e.meta?.['buffId'])] ?? e.meta?.['buffId']}`, 'buff');
+        } else {
+          push(e.t, `${actorName(e.target)} is fortified by ${names[String(e.meta?.['buffId'])] ?? e.meta?.['buffId']}`, 'buff');
         }
         break;
       case 'buffExpired':
         push(e.t, `${names[String(e.meta?.['buffId'])] ?? e.meta?.['buffId']} fades from ${actorName(e.target)}`, 'buff');
         break;
       case 'phaseChange':
-        push(e.t, `— Phase ${e.meta?.['phase']}: ${cfg.boss.addPhase.add.name}s emerge! —`, 'system');
-        break;
-      case 'addSpawn':
-        push(e.t, `${e.meta?.['name']} joins the fight`, 'system');
+        push(
+          e.t,
+          `— Phase ${e.meta?.['phase']}${cfg.boss ? `: ${cfg.boss.addPhase.add.name}s emerge!` : ''} —`,
+          'system',
+        );
         break;
       case 'movementStart':
-        push(e.t, `Lava surges — move out!`, 'system');
+        push(e.t, `The ground erupts — move out!`, 'system');
         break;
       case 'death':
-        push(e.t, `${actorName(e.source)} dies`, e.source === PLAYER_ID ? 'mistake' : 'system');
+        push(e.t, `${actorName(e.source)} dies`, playerIds.has(e.source) ? 'mistake' : 'system');
         break;
       case 'enrage':
-        push(e.t, `${cfg.boss.name} ENRAGES!`, 'mistake');
+        push(e.t, `${actorName(BOSS_ID)} ENRAGES!`, 'mistake');
         break;
       case 'fightEnd': {
         const r = String(e.meta?.['result']);
         push(
           e.t,
           r === 'kill'
-            ? `Victory! ${cfg.boss.name} dies at ${mmss(e.t)}`
+            ? `Victory at ${mmss(e.t)}`
             : `Wipe (${r}) at ${mmss(e.t)}`,
           'system',
         );

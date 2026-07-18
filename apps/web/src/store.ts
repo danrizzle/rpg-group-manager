@@ -1,12 +1,19 @@
 import {
+  COMP_PASSIVES,
   CONSUMABLES_BY_ID,
   CONSUMABLE_SLOTS,
+  GROUP_CDS,
   ITEMS_BY_ID,
   MAGE_TALENTS,
   PLAYER_ID,
+  applyComp,
+  encounterById,
   levelForXp,
   makeCinderMaw,
+  makeEmberForge,
   makeMage,
+  makePriest,
+  makeWarrior,
   runFight,
   sanitizeTalentSelection,
   talentPointsForLevel,
@@ -14,11 +21,14 @@ import {
   fightReview,
   type BossDefinition,
   type CharacterDef,
+  type ConsumableDefinition,
   type FightResult,
   type FightReview,
   type GearSlot,
   type GrindRates,
   type Item,
+  type MobPackDefinition,
+  type PartyMember,
   type StanceConfig,
 } from '@rpg/engine';
 import { create } from 'zustand';
@@ -61,6 +71,7 @@ import type {
   Inventory,
   Materials,
   RegionId,
+  RosterCharId,
   Task,
   TravelTask,
   Unlocks,
@@ -143,6 +154,50 @@ export function sanitizeConsumableSelection(ids: string[]): string[] {
   return ids.filter((id) => Boolean(CONSUMABLES_BY_ID[id])).slice(0, CONSUMABLE_SLOTS);
 }
 
+// ---- Roster (phase 4): the recruits' builds --------------------------------
+// Elara keeps her legacy top-level fields (zero-risk for live saves); Borin
+// (warrior) and Seren (priest) carry a RosterBuild each. Recruits arrive at
+// the cap in starter gear once Cinder Maw first dies.
+
+export interface RosterBuild {
+  stance: StanceConfig;
+  gear: GearSelection;
+  /** Equipped consumable slot ids (shared bank pool feeds the whole party). */
+  consumables: string[];
+}
+
+export const DEFAULT_ROSTER: Record<RosterCharId, RosterBuild> = {
+  warrior: {
+    stance: { ...AUTO_PRESET },
+    gear: { weapon: 'militia-blade', chest: 'padded-hauberk', ring: 'band-of-vigor', trinket: 'lucky-charm' },
+    consumables: [],
+  },
+  priest: {
+    stance: { ...AUTO_PRESET },
+    gear: { weapon: 'novice-crook', chest: 'acolyte-robe', ring: 'band-of-clarity', trinket: 'lucky-charm' },
+    consumables: [],
+  },
+};
+
+/** Meta for the roster UI; build factories live in the engine. */
+export const ROSTER_CHARS: { id: RosterCharId; name: string; classLabel: string; role: string }[] = [
+  { id: 'warrior', name: 'Borin', classLabel: 'Warrior', role: 'tank' },
+  { id: 'priest', name: 'Seren', classLabel: 'Priest', role: 'healer' },
+];
+
+/** Repair a persisted roster build against current content. */
+function sanitizeRosterBuild(build: Partial<RosterBuild> | undefined, fallback: RosterBuild): RosterBuild {
+  const gear = { ...fallback.gear, ...(build?.gear ?? {}) };
+  for (const [slot, id] of Object.entries(gear)) {
+    if (id && !ITEMS_BY_ID[id]) gear[slot as GearSlot] = '';
+  }
+  return {
+    stance: { ...fallback.stance, ...(build?.stance ?? {}) },
+    gear,
+    consumables: sanitizeConsumableSelection(build?.consumables ?? []),
+  };
+}
+
 const TALENT_COSTS: Record<string, number> = Object.fromEntries(
   MAGE_TALENTS.nodes.map((n) => [n.id, n.cost]),
 );
@@ -187,9 +242,16 @@ export interface AttemptRecord {
 export interface FightState {
   result: FightResult;
   seed: number;
-  player: CharacterDef;
-  boss: BossDefinition;
+  /** Solo pulls (Elara vs a world boss). */
+  player?: CharacterDef;
+  /** Party pulls (dungeon encounters) — defs in fight order. */
+  party?: CharacterDef[];
+  boss?: BossDefinition;
+  pack?: MobPackDefinition;
+  /** attempts/journal key: the boss id, or the dungeon encounter id. */
   bossId: string;
+  /** Set on dungeon pulls — clearing it unlocks the next encounter. */
+  encounterId?: string;
   review: FightReview;
   /** The boss's attempt record BEFORE this pull — what "vs last/best" compares against. */
   compare: AttemptRecord;
@@ -225,9 +287,22 @@ interface Store {
 
   // --- single real fight ---
   fight: FightState | null;
-  /** Per-boss last/best attempt summaries (persisted). */
+  /** Per-boss/encounter last/best attempt summaries (persisted). */
   attempts: Record<string, AttemptRecord>;
   pull: (bossId?: string) => void;
+
+  // --- roster & dungeon (phase 4) ---
+  roster: Record<RosterCharId, RosterBuild>;
+  setRosterStance: (char: RosterCharId, patch: Partial<StanceConfig>) => void;
+  setRosterGear: (char: RosterCharId, slot: GearSlot, itemId: string) => void;
+  setRosterConsumableSlot: (char: RosterCharId, slot: number, id: string) => void;
+  /** Which character the build panel shows ('elara' = the legacy fields). */
+  activeChar: 'elara' | RosterCharId;
+  setActiveChar: (c: 'elara' | RosterCharId) => void;
+  /** Ember Forge progress: encounter id → cleared (linear unlock chain). */
+  dungeonCleared: Record<string, boolean>;
+  pullEncounter: (encounterId: string) => void;
+  recordEncounterCleared: (encounterId: string) => void;
 
   // --- replay playback clock ---
   playT: number;
@@ -265,7 +340,35 @@ interface Store {
   buildBridge: () => void;
 }
 
-const DEFAULT_UNLOCKS: Unlocks = { banditKilled: false, bridgeBuilt: false, emberwingKilled: false };
+const DEFAULT_UNLOCKS: Unlocks = {
+  banditKilled: false,
+  bridgeBuilt: false,
+  emberwingKilled: false,
+  cinderMawKilled: false,
+};
+
+/**
+ * Resolve each party member's equipped slots against the SHARED bank pool:
+ * slots claim stock in party order; slots the remaining stock can't cover are
+ * skipped (sanitize-not-block, like solo pulls — a pull never throws).
+ */
+function resolvePartySlots(
+  perChar: string[][],
+  inventory: Inventory,
+): ConsumableDefinition[][] {
+  const remaining: Inventory = { ...inventory };
+  return perChar.map((slots) => {
+    const defs: ConsumableDefinition[] = [];
+    for (const id of slots) {
+      const def = CONSUMABLES_BY_ID[id];
+      if (!def) continue;
+      if ((remaining[id] ?? 0) < 1) continue;
+      remaining[id] = (remaining[id] ?? 0) - 1;
+      defs.push(def);
+    }
+    return defs;
+  });
+}
 
 const uid = (): string =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -481,6 +584,159 @@ export const useStore = create<Store>()(
           });
         },
 
+        // ---- roster & dungeon (phase 4) ----
+        roster: {
+          warrior: sanitizeRosterBuild(undefined, DEFAULT_ROSTER.warrior),
+          priest: sanitizeRosterBuild(undefined, DEFAULT_ROSTER.priest),
+        },
+        setRosterStance: (char, patch) =>
+          set((s) => ({
+            roster: {
+              ...s.roster,
+              [char]: { ...s.roster[char], stance: { ...s.roster[char].stance, ...patch } },
+            },
+          })),
+        setRosterGear: (char, slot, itemId) =>
+          set((s) => ({
+            roster: {
+              ...s.roster,
+              [char]: { ...s.roster[char], gear: { ...s.roster[char].gear, [slot]: itemId } },
+            },
+          })),
+        setRosterConsumableSlot: (char, slot, id) =>
+          set((s) => {
+            if (slot < 0 || slot >= CONSUMABLE_SLOTS) return {};
+            const cur = s.roster[char].consumables;
+            const slots = Array.from({ length: CONSUMABLE_SLOTS }, (_, i) => cur[i] ?? '');
+            slots[slot] = CONSUMABLES_BY_ID[id] ? id : '';
+            return {
+              roster: {
+                ...s.roster,
+                [char]: { ...s.roster[char], consumables: slots.filter((x) => x !== '') },
+              },
+            };
+          }),
+        activeChar: 'elara',
+        setActiveChar: (c) => set({ activeChar: c }),
+
+        dungeonCleared: {},
+        recordEncounterCleared: (encounterId) =>
+          set((s) =>
+            s.dungeonCleared[encounterId]
+              ? {}
+              : { dungeonCleared: { ...s.dungeonCleared, [encounterId]: true } },
+          ),
+        pullEncounter: (encounterId) => {
+          const {
+            stance, behavior, gear, xp, talents, equippedConsumables,
+            roster, inventory, attempts, unlocks, dungeonCleared,
+          } = get();
+          if (!unlocks.cinderMawKilled) return;
+          const dungeon = makeEmberForge();
+          const enc = encounterById(dungeon, encounterId);
+          if (!enc) return;
+          // Linear gate: trash before Slagmaw before Vulkan.
+          const idx = dungeon.encounters.findIndex((e) => e.id === encounterId);
+          if (idx > 0 && !dungeonCleared[dungeon.encounters[idx - 1]!.id]) return;
+
+          // Slots claim the SHARED bank stock in party order; short slots are
+          // skipped for this fight (never blocks the pull).
+          const [wCons, pCons, mCons] = resolvePartySlots(
+            [roster.warrior.consumables, roster.priest.consumables, equippedConsumables],
+            inventory,
+          ) as [ConsumableDefinition[], ConsumableDefinition[], ConsumableDefinition[]];
+          const defs = applyComp(
+            [
+              makeWarrior(undefined, resolveGear(roster.warrior.gear), 10, wCons),
+              makePriest(undefined, resolveGear(roster.priest.gear), 10, pCons),
+              makeMage(behavior, resolveGear(gear), levelForXp(xp), talents, mCons),
+            ],
+            GROUP_CDS,
+            COMP_PASSIVES,
+          );
+          const party: PartyMember[] = [
+            { character: defs[0]!, stance: { ...roster.warrior.stance } },
+            { character: defs[1]!, stance: { ...roster.priest.stance } },
+            { character: defs[2]!, stance: { ...stance } },
+          ];
+          const seed = Math.floor(Math.random() * 2 ** 31);
+          const setup =
+            enc.kind === 'boss'
+              ? { party, boss: enc.boss, seed }
+              : { party, pack: enc.pack, seed };
+          const result = runFight(setup);
+          const review = fightReview(result, setup);
+
+          const compare: AttemptRecord = attempts[encounterId] ?? {};
+          const attempt: AttemptSummary = {
+            result: result.result,
+            durationMs: result.durationMs,
+            dps: review.summary.dps,
+            at: Date.now(),
+          };
+          const best =
+            attempt.result === 'kill' &&
+            (compare.best === undefined || attempt.durationMs < compare.best.durationMs)
+              ? attempt
+              : compare.best;
+          const nextAttempts = {
+            ...attempts,
+            [encounterId]: { last: attempt, ...(best !== undefined ? { best } : {}) },
+          };
+
+          // Consumption (win or lose): passives 1 per char per distinct id;
+          // potion charges per char from the event stream; capped by the
+          // shared stock at the end.
+          const members = [
+            { id: 'warrior', cons: wCons },
+            { id: 'priest', cons: pCons },
+            { id: 'mage', cons: mCons },
+          ];
+          const spent: Inventory = {};
+          for (const m of members) {
+            const seen = new Set<string>();
+            for (const def of m.cons) {
+              if (seen.has(def.id)) continue;
+              seen.add(def.id);
+              if (def.kind === 'passive') {
+                spent[def.id] = (spent[def.id] ?? 0) + 1;
+              } else {
+                const used = result.events.filter(
+                  (e) =>
+                    e.type === 'heal' &&
+                    e.source === m.id &&
+                    e.meta?.['abilityId'] === def.ability.id,
+                ).length;
+                spent[def.id] = (spent[def.id] ?? 0) + used;
+              }
+            }
+          }
+          const nextInventory = { ...inventory };
+          for (const [id, n] of Object.entries(spent)) {
+            const capped = Math.min(n, nextInventory[id] ?? 0);
+            if (capped > 0) nextInventory[id] = (nextInventory[id] ?? 0) - capped;
+          }
+
+          set({
+            fight: {
+              result,
+              seed,
+              party: defs,
+              ...(enc.kind === 'boss' ? { boss: enc.boss } : { pack: enc.pack }),
+              bossId: encounterId,
+              encounterId,
+              review,
+              compare,
+            },
+            attempts: nextAttempts,
+            inventory: nextInventory,
+            playT: 0,
+            playing: true,
+            speed: 1,
+            view: 'combat',
+          });
+        },
+
         playT: 0,
         playing: false,
         speed: 1,
@@ -665,6 +921,8 @@ export const useStore = create<Store>()(
               ...s.unlocks,
               banditKilled: s.unlocks.banditKilled || boss === 'bandit-warlord',
               emberwingKilled: s.unlocks.emberwingKilled || boss === 'emberwing',
+              // Cinder Maw falling opens the Ember Forge and brings the recruits.
+              cinderMawKilled: s.unlocks.cinderMawKilled || boss === 'cinder-maw',
             },
           })),
 
@@ -680,7 +938,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 5,
+      version: 6,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
@@ -689,6 +947,8 @@ export const useStore = create<Store>()(
         talents: s.talents,
         equippedConsumables: s.equippedConsumables,
         loadouts: s.loadouts,
+        roster: s.roster,
+        dungeonCleared: s.dungeonCleared,
         xp: s.xp,
         region: s.region,
         unlocks: s.unlocks,
@@ -720,8 +980,20 @@ export const useStore = create<Store>()(
         // (v5, slice 6: home base — `buildings` joins via the unconditional
         // backfill below; the bank arrives pre-built at tier 1. Over-cap
         // holdings are never confiscated, they just stop growing.)
+        // (v6, phase 4: roster + dungeon join via the unconditional backfills
+        // below; saves that already killed Cinder Maw get the recruits
+        // immediately via the attempts-record backfill.)
         s.materials = { bridgeTimber: 0, sunleaf: 0, emberbloom: 0, ...(s.materials ?? {}) };
         s.buildings = { ...INITIAL_BUILDINGS, ...(s.buildings ?? {}) };
+        s.unlocks = { ...DEFAULT_UNLOCKS, ...(s.unlocks ?? {}) };
+        if (!s.unlocks.cinderMawKilled && s.attempts?.['cinder-maw']?.best) {
+          s.unlocks.cinderMawKilled = true;
+        }
+        s.roster = {
+          warrior: sanitizeRosterBuild(s.roster?.warrior, DEFAULT_ROSTER.warrior),
+          priest: sanitizeRosterBuild(s.roster?.priest, DEFAULT_ROSTER.priest),
+        };
+        s.dungeonCleared = { ...(s.dungeonCleared ?? {}) };
         // Repair against current content — talent ids may have changed.
         s.talents = sanitizeTalentSelection(
           MAGE_TALENTS,

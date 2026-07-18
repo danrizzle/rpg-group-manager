@@ -1,4 +1,4 @@
-import { CONSUMABLES_BY_ID, type PotionNote } from '@rpg/engine';
+import { CONSUMABLES_BY_ID, PLAYER_ID, type PotionNote } from '@rpg/engine';
 import { useEffect, useMemo, useRef } from 'react';
 import { buildLog, mmss, Replay, type ActorView } from '../fight/replay';
 import { useStore, type AttemptSummary, type FightState } from '../store';
@@ -11,6 +11,8 @@ const BUFF_NAMES: Record<string, string> = {
   pyroclasm: 'Pyroclasm',
   'flask-of-embers': 'Flask of Embers',
   'fire-ward-potion': 'Fire Ward',
+  'battle-shout': 'Battle Shout',
+  'shield-wall': 'Shield Wall',
 };
 
 const POTION_NOTES: Record<PotionNote, string> = {
@@ -45,13 +47,28 @@ function PostFightReview({ fight }: { fight: FightState }) {
   const used = Object.entries(review.consumablesUsed).map(([id, n]) =>
     `${n > 1 ? `${n}× ` : ''}${CONSUMABLES_BY_ID[id]?.name ?? id}`,
   );
+
+  // Who the wipe line is about: the last player-side death in the stream.
+  const names: Record<string, string> = {};
+  for (const p of fight.party ?? []) names[p.id ?? PLAYER_ID] = p.name;
+  if (fight.player) names[PLAYER_ID] = fight.player.name;
+  let lastDead: string | undefined;
+  for (const e of result.events) {
+    if (e.type === 'death' && names[e.source]) lastDead = names[e.source];
+  }
   const wipeLine = review.wipe
     ? review.wipe.killedBy !== undefined
-      ? `${mmss(review.wipe.atMs)}: ${cause(review.wipe.killedBy)} killed Elara — ${
+      ? `${mmss(review.wipe.atMs)}: ${cause(review.wipe.killedBy)} killed ${lastDead ?? 'the party'} — ${
           review.wipe.potionNote ? POTION_NOTES[review.wipe.potionNote] : ''
         }`
-      : `${cause(review.wipe.kind)} at ${mmss(review.wipe.atMs)} with the boss at ${review.wipe.bossHpPctLeft?.toFixed(0) ?? '?'}%`
+      : `${cause(review.wipe.kind)} at ${mmss(review.wipe.atMs)}${
+          review.wipe.bossHpPctLeft !== undefined
+            ? ` with the boss at ${review.wipe.bossHpPctLeft.toFixed(0)}%`
+            : ''
+        }`
     : null;
+
+  const per = review.summary.perCharacter;
 
   return (
     <div className="review-block">
@@ -65,6 +82,16 @@ function PostFightReview({ fight }: { fight: FightState }) {
           <span className="muted"> · {vsText('last', compare.last, result.durationMs)}</span>
         )}
       </div>
+      {per && (
+        <div className="statline muted">
+          {Object.values(per)
+            .map(
+              (c) =>
+                `${c.name}: ${Math.round(c.dps)} dps${c.healingDone > 0 ? ` / ${Math.round(c.hps)} hps` : ''}${c.died ? ' †' : ''}`,
+            )
+            .join(' · ')}
+        </div>
+      )}
       {wipeLine && <div className="statline log-loss">{wipeLine}</div>}
       <div className="statline muted">
         Used: {used.length ? used.join(', ') : 'no consumables'}
@@ -78,7 +105,10 @@ function HpBar({ actor, big }: { actor: ActorView; big?: boolean }) {
   return (
     <div className={`frame ${big ? 'frame-big' : ''} ${actor.alive ? '' : 'frame-dead'}`}>
       <div className="frame-head">
-        <span className="frame-name">{actor.name}</span>
+        <span className="frame-name">
+          {actor.name}
+          {actor.role ? <span className="muted"> · {actor.role}</span> : null}
+        </span>
         <span className="frame-buffs">
           {actor.buffs.map((b) => (
             <span key={b} className={`chip ${b === 'tantrum' ? 'chip-warn' : ''}`}>
@@ -100,23 +130,49 @@ function HpBar({ actor, big }: { actor: ActorView; big?: boolean }) {
   );
 }
 
+function CastBar({ actor, playT }: { actor: ActorView; playT: number }) {
+  if (!actor.casting || actor.casting.durationMs <= 0) return null;
+  return (
+    <div className="castbar">
+      <div
+        className="castbar-fill"
+        style={{
+          width: `${Math.min(100, ((playT - actor.casting.startT) / actor.casting.durationMs) * 100)}%`,
+        }}
+      />
+      <span className="castbar-label">{actor.casting.abilityId}</span>
+    </div>
+  );
+}
+
 export function FightView() {
   const fight = useStore((s) => s.fight);
   const pull = useStore((s) => s.pull);
+  const pullEncounter = useStore((s) => s.pullEncounter);
   const playT = useStore((s) => s.playT);
   const playing = useStore((s) => s.playing);
   const speed = useStore((s) => s.speed);
   const setPlayback = useStore((s) => s.setPlayback);
   const recordBossKill = useStore((s) => s.recordBossKill);
+  const recordEncounterCleared = useStore((s) => s.recordEncounterCleared);
   const logRef = useRef<HTMLDivElement>(null);
 
+  const replayCfg = useMemo(() => {
+    if (!fight) return null;
+    return {
+      players: fight.party ?? [{ ...fight.player!, id: PLAYER_ID }],
+      ...(fight.boss ? { boss: fight.boss } : {}),
+      ...(fight.pack ? { pack: fight.pack } : {}),
+    };
+  }, [fight]);
+
   const replay = useMemo(
-    () => (fight ? new Replay(fight.result.events, { player: fight.player, boss: fight.boss }) : null),
-    [fight],
+    () => (fight && replayCfg ? new Replay(fight.result.events, replayCfg) : null),
+    [fight, replayCfg],
   );
   const log = useMemo(
-    () => (fight ? buildLog(fight.result.events, { player: fight.player, boss: fight.boss }) : []),
-    [fight],
+    () => (fight && replayCfg ? buildLog(fight.result.events, replayCfg) : []),
+    [fight, replayCfg],
   );
 
   // Playback clock: advance playT with real time × speed.
@@ -138,10 +194,13 @@ export function FightView() {
 
   const view = replay?.seek(playT) ?? null;
 
-  // A zone boss unlocks the next region once its kill has been watched to the end.
+  // A watched kill unlocks: zone bosses set region flags, dungeon encounters
+  // open the next one in the chain.
   useEffect(() => {
-    if (view?.ended === 'kill' && fight) recordBossKill(fight.bossId as BossId);
-  }, [view?.ended, fight, recordBossKill]);
+    if (view?.ended !== 'kill' || !fight) return;
+    if (fight.encounterId) recordEncounterCleared(fight.encounterId);
+    else recordBossKill(fight.bossId as BossId);
+  }, [view?.ended, fight, recordBossKill, recordEncounterCleared]);
 
   const visibleLog = useMemo(() => {
     const upTo = log.filter((l) => l.t <= playT);
@@ -167,47 +226,55 @@ export function FightView() {
     );
   }
 
-  const boss = view.actors.find((a) => a.id === 'boss')!;
-  const player = view.actors.find((a) => a.id === 'player')!;
-  const livingAdds = view.actors.filter((a) => a.id.startsWith('add-') && a.alive);
-  const enrageIn = fight.boss.enrageAtMs - playT;
+  const title = fight.boss?.name ?? fight.pack?.name ?? 'Fight';
+  const players = view.actors.filter((a) => a.side === 'players');
+  const enemies = view.actors.filter((a) => a.side === 'enemies');
+  const boss = fight.boss ? enemies.find((a) => a.id === 'boss') : undefined;
+  const otherEnemies = enemies.filter((a) => a !== boss && (a.alive || a.hp > 0));
+  const livingOthers = enemies.filter((a) => a !== boss && a.alive);
+  const enrageIn = fight.boss ? fight.boss.enrageAtMs - playT : 0;
 
   return (
     <section className="panel fight-panel">
       <div className="fight-header">
-        <h2>{fight.boss.name}</h2>
+        <h2>{title}</h2>
         <span className="muted">seed {fight.seed}</span>
-        <button className="btn" onClick={() => pull(fight.bossId)}>
+        <button
+          className="btn"
+          onClick={() => (fight.encounterId ? pullEncounter(fight.encounterId) : pull(fight.bossId))}
+        >
           Pull again
         </button>
       </div>
 
       <div className="fight-status">
         <span className="time">{mmss(playT)}</span>
-        <span className={`chip ${view.enraged ? 'chip-danger' : ''}`}>
-          {view.enraged ? 'ENRAGED' : `enrage in ${mmss(Math.max(0, enrageIn))}`}
-        </span>
-        <span className="chip">phase {view.phase}</span>
+        {fight.boss && (
+          <span className={`chip ${view.enraged ? 'chip-danger' : ''}`}>
+            {view.enraged ? 'ENRAGED' : `enrage in ${mmss(Math.max(0, enrageIn))}`}
+          </span>
+        )}
+        {fight.boss && <span className="chip">phase {view.phase}</span>}
         {view.moving && <span className="chip chip-warn">moving</span>}
         <span className="dps">DPS {Math.round(view.dps)}</span>
       </div>
 
-      <HpBar actor={boss} big />
-      {livingAdds.length > 0 && <div className="adds">{livingAdds.map((a) => <HpBar key={a.id} actor={a} />)}</div>}
+      {boss && <HpBar actor={boss} big />}
+      {fight.boss
+        ? livingOthers.length > 0 && (
+            <div className="adds">{livingOthers.map((a) => <HpBar key={a.id} actor={a} />)}</div>
+          )
+        : otherEnemies.length > 0 && (
+            <div className="adds">{otherEnemies.map((a) => <HpBar key={a.id} actor={a} />)}</div>
+          )}
 
       <div className="spacer" />
-      <HpBar actor={player} big />
-      {player.casting && player.casting.durationMs > 0 && (
-        <div className="castbar">
-          <div
-            className="castbar-fill"
-            style={{
-              width: `${Math.min(100, ((playT - player.casting.startT) / player.casting.durationMs) * 100)}%`,
-            }}
-          />
-          <span className="castbar-label">{player.casting.abilityId}</span>
+      {players.map((p) => (
+        <div key={p.id}>
+          <HpBar actor={p} big={players.length === 1} />
+          <CastBar actor={p} playT={playT} />
         </div>
-      )}
+      ))}
 
       {view.ended && (
         <>

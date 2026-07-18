@@ -192,7 +192,7 @@ As of July 2026.
         the auto policy holds it for ≥35% average party deficit, plans/
         calls will fire it deliberately. 15 new tests (107 green); all 7
         solo CLI baselines still byte-identical. Balance below.
-  - [ ] **Slice 3 — Roster + dungeon (web).** Recruits: first Cinder Maw
+  - [x] **Slice 3 — Roster + dungeon (web).** Recruits: first Cinder Maw
         kill unlocks Borin (warrior) + Seren (priest) — backfilled for
         saves that already killed it. Per-character builds: Elara keeps her
         legacy top-level persisted fields (zero-risk for live saves);
@@ -203,6 +203,23 @@ As of July 2026.
         gates the bosses per run), party pulls; FightView/Replay/ReviewPanel
         generalized to N actors from `join` events (per-char DPS/HPS bars,
         deaths). Party consumable slots draw on the shared bank. Persist v6.
+        **Landed:** `pullEncounter` (linear encounter gate, party assembly
+        via `applyComp`, shared-bank slot resolution `resolvePartySlots` in
+        party order, per-char consumption from the stream capped by shared
+        stock), `FightState` gains `party`/`pack`/`encounterId`; replay
+        layer + `buildLog` rewritten around a `ReplayConfig{players,boss?,
+        pack?}`; FightView renders N player frames with role labels + cast
+        bars, pack enemies, per-char review line, wipe line names the last
+        death. DungeonPanel (sealed-door hint pre-unlock; per-encounter
+        last/best + cleared chips). CharacterPanel switcher; recruits get
+        stance/potion/gear (class-filtered)/consumable slots; Elara's gear
+        picker now class-filtered too. Persist v6 migration verified in
+        isolated contexts: v5+cinder-maw-kill → recruits + backfilled flag,
+        v5 without → sealed door, real save migrated cleanly (v6, all data
+        intact, stashed to scratchpad first). Full dungeon cleared
+        in-browser (whelps 0:22, Slagmaw 4:04 with 153 priest HPS, Vulkan
+        3:42); flask consumed from shared stock; out-of-stock slot skipped
+        ("Used: no consumables"); solo Cinder Maw pull byte-path re-verified.
   - [ ] **Slice 4 — Boss journal + discovery + familiarity (engine + web).**
         Engine `model/journal.ts`: `discoverFromEvents` (stream-only facts:
         timeline casts seen, movement/enrage/phase-2/adds/tantrum seen,
@@ -450,6 +467,26 @@ alternative. Grouped by slice as they land.
   members are at cap and dungeon reward loops (loot) are phase-5 scope;
   trash is a time/consumable cost, not a farm. Rejected: XP-bearing
   trash (nothing to spend it on at cap 10).
+
+**Slice 3 (roster + dungeon web):**
+
+- **Dungeon progress is a persistent linear unlock** (clear an encounter
+  once, the next opens forever; everything stays re-pullable). Rejected:
+  per-run reset (a run lifecycle needs a reward loop — loot lockouts —
+  to justify it; that's phase-5 scope).
+- **Dungeon encounters are pulled from the map panel with no travel
+  cost** — matching the existing zone-boss Challenge buttons, which also
+  skip travel. Rejected: requiring a queued travel to Cinder Wastes
+  first (would be the only travel-gated fight in the game; unify travel
+  costs for ALL fights in one later pass instead).
+- **Recruits' earned stats are fixed at class defaults (discipline 50)**
+  — no dev-override sliders for them; Elara keeps hers as the tuning
+  probe. Familiarity (slice 4) becomes the recruits' earned-stat axis.
+- **Party consumable slots claim shared bank stock in party order**
+  (warrior → priest → mage) at pull time; short slots are skipped
+  silently (same sanitize-not-block rule as solo pulls). Rejected:
+  blocking the pull on shortage (a pull must never throw) and per-char
+  reserved stock (inventing an allocation UI nobody asked for).
 
 ## Environment notes
 
