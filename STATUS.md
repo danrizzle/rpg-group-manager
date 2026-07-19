@@ -540,23 +540,40 @@ bind from there on. As of July 2026.
         uniformly, the live `view.ended` banner shows **RETREAT** not WIPE.
         **8 new tests** (`test/rescue.test.ts` + `type4` retreat) covering
         `Actor.resurrect`, auto-rez-once, the raid-gate, and the early exit.
-  - [ ] **Slice 6 — Loadout library + full call palette + recruit talent
-        trees (web).** Loadouts today are Elara-only, keyed by `name`, with
-        no character binding, no `behavior`, and mage-only talents. Add an
-        `id` + `charId`/`classId` scoping (applying a warrior loadout to a
-        priest currently sanitizes gear/talents to empty — a silent bad
-        failure), `behavior`, per-boss assignment, and grouping/filter UI
-        (a flat list does not survive 20 chars × N loadouts). Per §4 the
-        library **also holds boss plans**. Warrior/priest talent trees land
-        here because loadouts are meaningless without them (deferred from
-        phase 4). Full call palette (§3 catalog): the remaining offensive/
-        defensive/tactical calls incl. interrupt reassignment and tank swap —
-        all `{kind:'ability'}` actions, so this is content + UI, not engine.
-        `PlanPanel`'s 9 hardcoded actions and `FightView`'s `ALL_CDS`/
-        `HEAL_CD` literals must become **roster-derived**. Per Law 1's
-        progressive disclosure, the palette unlocks incrementally — never 15
-        buttons at once. Watch the respec cost: bulk-applying 20 loadouts
-        must not charge 20 respecs.
+  - [x] **Slice 6 — Recruit talent trees + roster-derived call palette +
+        loadout scoping (web + engine content). ← LANDED.**
+        - **Warrior & Priest talent trees** (engine content:
+          `content/classes/warriorTalents.ts` + `priestTalents.ts`, 9 nodes ×
+          3 tiers each, cost 13 vs an 8-point pool). `makeWarrior`/`makePriest`
+          gain a `talents` arg (4th, consumables → 5th, matching `makeMage`);
+          empty selection folds to a **byte-identical no-op** (7 solo + 3
+          trinity streams diff-identical). Capstones grant the slice-4
+          abilities as content — Warrior → **Challenging Shout** (taunt),
+          Priest → **Purify** (dispel) + **Power Word: Barrier** (party absorb)
+          — so they never touch the trinity (opt-in via talents). Web: `talents`
+          on `RosterBuild` (+ `RosterBuildInput`, `charBuild`/`useCharBuild`,
+          `pullEncounter`, the worker, `buildSimRequest`); `spend/refund/
+          respecRosterTalent(char)` actions (respec charged once, like Elara's);
+          `TalentPanel` generalized over any `TalentTree` and rendered in
+          `RosterCharacterPanel`; persist **v10** backfills `talents: []` per
+          recruit build (sanitized against the tree).
+        - **Roster-derived call palette**: `FightView`'s hardcoded `ALL_CDS`/
+          `HEAL_CD` literals now derive from the ACTUAL party's abilities by
+          tag (`burst` / `heal-cd`), so comp/talent CDs (Battle Shout,
+          Pyroclasm, Rekindle, …) appear automatically; buttons disable when
+          the party has none.
+        - **Loadout scoping**: `Loadout.classId` added + v10 backfill (existing
+          loadouts = Elara's mage) so the model is per-class; respec is charged
+          only via the explicit respec action, so loadout-apply never charges.
+        **156 engine tests green; web typecheck + build clean.**
+        **v1 simplifications (recorded, not bugs):** the loadout LIBRARY UI
+        stays Elara-facing (the `classId`-scoped per-recruit loadout panel,
+        grouping/filter, per-boss assignment, and "library holds plans" are a
+        follow-up — the data model is ready); `PlanPanel`'s action list is
+        still partly hardcoded (the live palette is roster-derived, the plan
+        editor's curated list is not yet); progressive-disclosure gating of the
+        palette is not implemented. Recruit `behavior`/`xp` still default
+        (talents made real, the rest stays class-default).
   - [ ] **Slice 7 — Tier-2 raid + catalyst progression + access building
         (content + web).** The first raid, gated behind an **access
         building** (§5: "use it deliberately at raids and tier transitions" —

@@ -76,7 +76,7 @@ describe('trinity content integrity', () => {
 
   it('consumables fold into warrior/priest like any stat layer', () => {
     const bare = makeWarrior();
-    const warded = makeWarrior(undefined, undefined, 10, [WARD, POTION]);
+    const warded = makeWarrior(undefined, undefined, 10, [], [WARD, POTION]);
     expect(warded.stats.resistances.fire ?? 0).toBe(30);
     expect(bare.stats.resistances.fire ?? 0).toBe(0);
     expect(warded.abilities.some((a) => a.id === 'healing-potion')).toBe(true);
@@ -139,8 +139,8 @@ describe('Ember Forge balance direction (Monte Carlo)', () => {
         party: party(
           applyComp(
             [
-              makeWarrior(undefined, GEAR_SETS['warrior-starter']!, 10, [WARD]),
-              makePriest(undefined, GEAR_SETS['priest-starter']!, 10, [WARD]),
+              makeWarrior(undefined, GEAR_SETS['warrior-starter']!, 10, [], [WARD]),
+              makePriest(undefined, GEAR_SETS['priest-starter']!, 10, [], [WARD]),
               makeMage(undefined, GEAR_SETS['starter']!, 10, [], [WARD]),
             ],
             GROUP_CDS,

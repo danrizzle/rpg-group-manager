@@ -175,8 +175,8 @@ if (encounterName) {
         });
   const defs = applyComp(
     [
-      makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, pcons),
-      makePriest({ discipline: pdisc }, gearFor('priest'), 10, pcons),
+      makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, [], pcons),
+      makePriest({ discipline: pdisc }, gearFor('priest'), 10, [], pcons),
       makeMage({ discipline: pdisc }, gearFor('mage'), 10, talents, pcons),
     ],
     GROUP_CDS,
@@ -285,11 +285,11 @@ if (flag('raid')) {
           return c;
         });
   const raw = [
-    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, pcons),
-    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, pcons),
-    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pcons),
-    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pcons),
-    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pcons),
+    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, [], pcons),
+    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, [], pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, [], pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, [], pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, [], pcons),
     ...Array.from({ length: 5 }, () => makeMage({ discipline: pdisc }, gearFor('mage'), 10, talents, pcons)),
   ];
   // makeX hardcodes one id per class — give every member a unique id (tanks
