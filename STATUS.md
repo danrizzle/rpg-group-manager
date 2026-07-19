@@ -4,15 +4,18 @@
 
 **Phase 4 (Group content) COMPLETE — all 6 slices done (party sim, trinity +
 Ember Forge, roster/dungeon web, boss journal, boss plans, live calls).**
-Phase 5 (roster & raids) is under way on a **7-slice plan**: slices 1
-(per-character task queues), 2 (raid-scale party) and 3 (boss mechanics as a
-list + boss-applied debuffs + cast windows) have **landed** — `MAX_PARTY_SIZE`
-is a hard 10 with the four size cliffs fixed, and `BossDefinition` is now a
-`mechanics: Mechanic[]` list (all 5 bosses byte-identical) that can carry the
-tank-swap debuffs and interruptible casts raid content needs. Next is slice 4
-(type-4 machinery: stacking debuffs, taunt, dispel, interrupt). The remaining
-raid-side design questions (slot schedule, lockouts, loot) are still open and
-bind from there on. As of July 2026.
+Phase 5 (roster & raids) is on a **7-slice plan**. Slices **1–6 are landed**
+and **slice 7 is engine-complete** (raid content + comp rules; its web pull UI,
+access-building gate, and catalyst crafting are documented follow-ups):
+`MAX_PARTY_SIZE` is a hard 10 with the four size cliffs fixed; `BossDefinition`
+is a `mechanics: Mechanic[]` list; the type-4 stack (stacking tank-swap debuffs,
+taunt, dispel, interrupt, cast windows) is built and auto-answered; battle res +
+retreat work; recruits have real talent trees; and the first 10-man raid
+(**Cinderforge**) exercises the whole stack. Every solo + trinity stream stayed
+byte-identical throughout; **161 engine tests green, web typecheck + build
+clean.** Remaining before phase 6: the slice-7 web integration, a Normal≈90% /
+Heroic retune, and the open raid design questions (slot schedule, lockouts,
+loot). As of July 2026.
 
 ## Phase checklist
 
