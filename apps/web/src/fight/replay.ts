@@ -200,6 +200,13 @@ export class Replay {
           src.hp = 0;
         }
         break;
+      case 'resurrect':
+        if (tgt) {
+          tgt.alive = true;
+          tgt.hp = Math.round(tgt.maxHp * Number(e.meta?.['hpPct'] ?? 0.4));
+          tgt.casting = null;
+        }
+        break;
       case 'movementStart':
         this.moving = true;
         break;
@@ -324,6 +331,9 @@ export function buildLog(events: readonly CombatEvent[], cfg: ReplayConfig): Log
       }
       case 'death':
         push(e.t, `${actorName(e.source)} dies`, playerIds.has(e.source) ? 'mistake' : 'system');
+        break;
+      case 'resurrect':
+        push(e.t, `${actorName(e.source)} rekindles ${actorName(e.target)}!`, 'system');
         break;
       case 'enrage':
         push(e.t, `${actorName(BOSS_ID)} ENRAGES!`, 'mistake');

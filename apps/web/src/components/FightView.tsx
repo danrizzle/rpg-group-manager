@@ -365,7 +365,11 @@ export function FightView() {
       {view.ended && (
         <>
           <div className={`banner ${view.ended === 'kill' ? 'banner-win' : 'banner-loss'}`}>
-            {view.ended === 'kill' ? `VICTORY — ${mmss(fight.result.durationMs)}` : `WIPE — ${view.ended}`}
+            {view.ended === 'kill'
+              ? `VICTORY — ${mmss(fight.result.durationMs)}`
+              : view.ended === 'retreat'
+                ? `RETREAT — ${mmss(fight.result.durationMs)}`
+                : `WIPE — ${view.ended}`}
           </div>
           <PostFightReview fight={fight} />
         </>

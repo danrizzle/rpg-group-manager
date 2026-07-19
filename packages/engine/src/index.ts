@@ -15,6 +15,7 @@ export type {
   DispelEffect,
   TauntEffect,
   InterruptEffect,
+  ResurrectEffect,
 } from './model/ability';
 export { DEFAULT_STANCE, validateStance } from './model/stance';
 export type { StanceConfig } from './model/stance';

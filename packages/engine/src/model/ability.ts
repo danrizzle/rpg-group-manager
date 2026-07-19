@@ -14,7 +14,8 @@ export type AbilityTag =
   | 'heal-cd'
   | 'taunt'
   | 'dispel'
-  | 'interrupt';
+  | 'interrupt'
+  | 'battle-res';
 
 export interface DamageEffect {
   kind: 'damage';
@@ -98,13 +99,20 @@ export interface InterruptEffect {
   kind: 'interrupt';
 }
 
+/** Battle res (GDD §3): revive a dead ally at `hpPct` of their max HP. */
+export interface ResurrectEffect {
+  kind: 'resurrect';
+  hpPct: number;
+}
+
 export type AbilityEffect =
   | DamageEffect
   | HealEffect
   | BuffEffect
   | TauntEffect
   | DispelEffect
-  | InterruptEffect;
+  | InterruptEffect
+  | ResurrectEffect;
 
 export interface Ability {
   id: string;

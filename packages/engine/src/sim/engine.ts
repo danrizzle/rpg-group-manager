@@ -7,6 +7,7 @@ import {
   type BuffEffect,
   type DispelEffect,
   type GroupHealTarget,
+  type ResurrectEffect,
   type TauntEffect,
 } from '../model/ability';
 import { Actor } from '../model/actor';
@@ -622,7 +623,23 @@ export class Fight {
       this.resolveDispel(char, effect);
     } else if (effect.kind === 'interrupt') {
       this.resolveInterrupt(char);
+    } else if (effect.kind === 'resurrect') {
+      this.resolveResurrect(char, effect);
     }
+  }
+
+  /** Battle res: revive the highest-priority dead ally and restart its loop. */
+  private resolveResurrect(char: CharState, effect: ResurrectEffect): void {
+    const dead = this.chars.filter((c) => !c.actor.alive);
+    if (dead.length === 0) return;
+    const pri = (r?: string) => (r === 'healer' ? 0 : r === 'tank' ? 1 : 2);
+    const target = [...dead].sort((a, b) => pri(a.def.role) - pri(b.def.role))[0]!;
+    target.actor.resurrect(effect.hpPct);
+    target.potionPending = false;
+    target.moving = false;
+    this.emit({ type: 'resurrect', source: char.actor.id, target: target.actor.id, meta: { hpPct: effect.hpPct } });
+    // The decide loop returns on death and never reschedules — restart it.
+    this.scheduler.in(GCD_MS, () => this.decide(target));
   }
 
   /** Taunt: force every enemy onto the caster and leave them top-threat. */
@@ -672,7 +689,10 @@ export class Fight {
    */
   private autoSituational(char: CharState, now: number): Ability | null {
     const kit = char.def.abilities;
-    const ready = (a: Ability) => !char.actor.isReady(a, now) ? false : true;
+    const ready = (a: Ability) => char.actor.isReady(a, now) && this.charges(char, a) > 0;
+
+    const rez = kit.find((a) => a.effect.kind === 'resurrect' && ready(a));
+    if (rez && this.chars.some((c) => !c.actor.alive)) return rez;
 
     const interrupt = kit.find((a) => a.effect.kind === 'interrupt' && ready(a));
     if (interrupt && this.activeBossCasts.some((c) => !c.cancelled)) return interrupt;

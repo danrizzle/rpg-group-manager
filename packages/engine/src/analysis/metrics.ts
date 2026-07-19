@@ -208,7 +208,10 @@ export function fightReview(fight: FightResult, setup: Omit<FightSetup, 'seed'>)
     }
   }
 
-  if (fight.result === 'kill') return { summary, consumablesUsed, wipe: null };
+  // A retreat is a deliberate early exit, not a wipe — the party lived.
+  if (fight.result === 'kill' || fight.result === 'retreat') {
+    return { summary, consumablesUsed, wipe: null };
+  }
 
   const wipe: WipeAnalysis = { kind: fight.result, atMs: fight.durationMs };
   if (fight.result === 'playerDeath' || summary.deathCause !== undefined) {

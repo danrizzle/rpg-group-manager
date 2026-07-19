@@ -156,6 +156,14 @@ export class Actor {
     return healed;
   }
 
+  /** Battle res (GDD §3): bring a corpse back at a fraction of max HP. */
+  resurrect(hpPct: number): void {
+    if (this.alive) return;
+    this.alive = true;
+    this.hp = Math.max(1, Math.round(this.stats.maxHp * Math.min(1, Math.max(0, hpPct))));
+    this.buffs = [];
+  }
+
   private activeBuffs(now: number): ActiveBuff[] {
     return this.buffs.filter((b) => b.expiresAtMs > now);
   }

@@ -518,24 +518,28 @@ bind from there on. As of July 2026.
         parity, auto tank-swap, auto dispel, interrupt cancels the cast, plain
         kit emits nothing) → **146 green**. Web still typecheck + build clean
         (PlanAction `retreat` guarded in the two label helpers).
-  - [ ] **Slice 5 — Battle res + retreat (engine + web).** Per ground rule 1
-        these are the *only* two calls needing engine work beyond effects.
-        **Battle res** is `{kind:'ability'}` with a new `resurrect` effect:
-        `Actor.alive` is one-way today (nothing flips it back, and `heal()`
-        would raise HP on a corpse leaving `alive === false`), so add
-        `Actor.resurrect(hpPct)`, a `deadChars()` selector, a `resurrect`
-        event + replay handling, and — easy to miss — **restart the revived
-        character's decide loop**, which returns without rescheduling on
-        death (otherwise: revived but idle forever). Scarcity (1–2/attempt,
-        §3) rides the existing `Ability.chargesPerFight`. Note the fight ends
-        synchronously on the last death, so a res can never be issued after a
-        wipe — a design-consistent constraint worth stating in the UI.
-        **Retreat** is the one genuinely new `PlanAction` kind: `FightResult`
-        has no early-exit (`end()` is only reachable via kill/wipe/enrage/
-        timeout), so add a `'retreat'` `FightResultKind` threaded through
-        `analysis/metrics.ts`, `AttemptSummary.result` and `finalizeFight`.
-        "Saves remaining consumables" is nearly free — consumption is already
-        computed from the final stream in `finalizeFight` (slice 4.6).
+  - [x] **Slice 5 — Battle res + retreat (engine + web). ← LANDED.** Both are
+        additive → all existing streams byte-identical (150 tests green).
+        **Battle res**: `ResurrectEffect {kind:'resurrect';hpPct}` +
+        `Actor.resurrect` (flips `alive` back, sets HP, clears buffs); the sim
+        picks the highest-priority dead ally (healer→tank→dps), emits
+        **`resurrect`**, and **restarts the revived character's decide loop**
+        (it stops on death). Scarcity via `chargesPerFight` (Rekindle = 1/fight).
+        Auto policy in `autoSituational` (revive whenever someone's down, off
+        CD/charges). Content: **Rekindle** group CD (`content/groupCds.ts`,
+        `requires: {mage:2}`, granted to the first mage) — raid-gated so the
+        1-mage trinity never gets it and its streams stay byte-identical
+        (tested). Replay revives the bar + logs "rekindles"; the res can't fire
+        after a full wipe (fight ends on the last death — a design constraint).
+        **Retreat**: `Fight.retreat()` + `'retreat'` FightResultKind (landed in
+        slice 4's pre-work) + the `{kind:'retreat'}` PlanAction, now executed by
+        `planRunner` (ends the fight early). `fightReview` treats retreat as
+        **not a wipe** (`wipe: null`); "saves remaining consumables" is free
+        (consumption is computed from the final stream, and an early exit simply
+        used fewer). Web: `finalizeFight` already handles any non-kill
+        uniformly, the live `view.ended` banner shows **RETREAT** not WIPE.
+        **8 new tests** (`test/rescue.test.ts` + `type4` retreat) covering
+        `Actor.resurrect`, auto-rez-once, the raid-gate, and the early exit.
   - [ ] **Slice 6 — Loadout library + full call palette + recruit talent
         trees (web).** Loadouts today are Elara-only, keyed by `name`, with
         no character binding, no `behavior`, and mage-only talents. Add an
