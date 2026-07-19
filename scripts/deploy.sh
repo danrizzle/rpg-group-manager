@@ -77,7 +77,9 @@ if [[ "$BOOTSTRAP" -eq 1 ]]; then
 
 	# Written as a separate file rather than appended to the Caddyfile, so a
 	# re-bootstrap replaces it cleanly instead of duplicating the block.
-	ssh "$SSH_TARGET" "cat > /etc/caddy/conf.d/rpg.caddy" <<CADDY
+	# Caddyfile.d/ is Fedora's packaging convention and already exists on the
+	# box — using it rather than inventing a conf.d/ keeps this idiomatic.
+	ssh "$SSH_TARGET" "cat > /etc/caddy/Caddyfile.d/rpg.caddy" <<CADDY
 # rpg-group-manager — pure static site, no backend (see scripts/deploy.sh).
 $HOST {
 	encode zstd gzip
@@ -95,21 +97,22 @@ $HOST {
 }
 CADDY
 
-	# Import the conf.d directory from the main Caddyfile if it isn't already.
-	# The Caddyfile serves OTHER live sites, so: back it up first, validate
-	# before reloading, and restore the backup if validation fails. A broken
-	# Caddyfile takes every vhost on the box down, not just this one.
+	# Wire up Caddyfile.d from the main Caddyfile if it isn't already. That
+	# file serves OTHER live sites, so: back it up first, validate before
+	# reloading, and restore the backup if validation fails. A broken Caddyfile
+	# takes every vhost on the box down, not just this one.
 	ssh "$SSH_TARGET" '
 		set -e
-		mkdir -p /etc/caddy/conf.d
-		cp -a /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak-$(date -u +%Y%m%dT%H%M%SZ)"
-		if ! grep -q "conf.d/\*.caddy" /etc/caddy/Caddyfile; then
-			printf "\nimport conf.d/*.caddy\n" >> /etc/caddy/Caddyfile
-			echo "  added: import conf.d/*.caddy"
+		BAK="/etc/caddy/Caddyfile.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+		cp -a /etc/caddy/Caddyfile "$BAK"
+		if ! grep -q "Caddyfile.d/\*.caddy" /etc/caddy/Caddyfile; then
+			printf "\nimport Caddyfile.d/*.caddy\n" >> /etc/caddy/Caddyfile
+			echo "  added: import Caddyfile.d/*.caddy"
 		fi
-		if ! caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -5; then
+		if ! caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
 			echo "  validation FAILED — restoring the previous Caddyfile" >&2
-			cp -a "$(ls -1t /etc/caddy/Caddyfile.bak-* | head -1)" /etc/caddy/Caddyfile
+			caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -5 >&2
+			cp -a "$BAK" /etc/caddy/Caddyfile
 			exit 1
 		fi
 		systemctl reload caddy
