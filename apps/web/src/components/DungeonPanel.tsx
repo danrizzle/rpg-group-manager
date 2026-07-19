@@ -17,6 +17,7 @@ import { usePreviewParty, useRoster, useStore, type JournalEntry } from '../stor
 /** The three founders — the dungeon party (raids use the saved selection). */
 const TRINITY_IDS = ['warrior', 'priest', 'mage'];
 import { PlanPanel } from './PlanPanel';
+import { BossLoadouts } from './BossLoadouts';
 import { RaidRosterPicker } from './RaidRosterPicker';
 
 const secs = (ms: number) => `${Math.round(ms / 1000)} s`;
@@ -193,7 +194,13 @@ export function DungeonPanel({ make }: { make: () => DungeonDefinition }) {
               <>
                 <JournalCard boss={enc.boss} entry={journal[enc.id]} />
                 {(journal[enc.id]?.attempts ?? 0) > 0 && (
-                  <PlanPanel boss={enc.boss} journalEntry={journal[enc.id]} party={previewParty} />
+                  <>
+                <BossLoadouts
+                  encounterId={enc.id}
+                  party={isRaid ? raidRoster : TRINITY_IDS}
+                />
+                <PlanPanel boss={enc.boss} journalEntry={journal[enc.id]} party={previewParty} />
+              </>
                 )}
               </>
             )}

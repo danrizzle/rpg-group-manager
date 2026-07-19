@@ -291,3 +291,13 @@ body {
 .raid-picker { margin: 6px 0; }
 .raid-picker-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .chip-inline { margin-left: 4px; }
+
+/* Per-boss loadout assignment (phase-5 slice 13). */
+.boss-loadouts { margin: 6px 0; }
+.boss-loadout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 2px 8px;
+}
+.boss-loadout-row { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.boss-loadout-row select { flex: 1; min-width: 0; }

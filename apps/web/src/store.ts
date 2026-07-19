@@ -521,7 +521,17 @@ interface Store {
   respecTalents: (charId: CharId) => void;
   saveLoadout: (charId: CharId, name: string) => void;
   applyLoadout: (charId: CharId, name: string) => void;
-  deleteLoadout: (name: string) => void;
+  /** Names are unique PER CLASS, so deleting needs the class too. */
+  deleteLoadout: (classId: ClassId, name: string) => void;
+  /**
+   * Per-boss loadout assignment (GDD §2): encounter id → char id → loadout
+   * name. Applied on demand from the encounter, never silently at pull time —
+   * the character panel must keep showing what a character will actually wear.
+   */
+  bossLoadouts: Record<string, Record<CharId, string>>;
+  assignBossLoadout: (encounterId: string, charId: CharId, name: string) => void;
+  /** Apply every assignment for an encounter; skips ones that no longer exist. */
+  equipForBoss: (encounterId: string) => void;
 
   // --- training dummy (worker) ---
   sim: SimState;
@@ -1012,13 +1022,20 @@ export const useStore = create<Store>()(
               consumables: [...c.consumables],
               classId: c.classId,
             };
-            const others = s.loadouts.filter((l) => l.name !== name);
+            // Unique per (class, name): "Raid" can mean one thing for a mage
+            // and another for a warrior, and a global name space would have
+            // them overwrite each other.
+            const others = s.loadouts.filter(
+              (l) => !(l.name === name && l.classId === c.classId),
+            );
             return { loadouts: [...others, loadout] };
           }),
         applyLoadout: (charId, name) =>
           set(
             patchChar(charId, (c) => {
-              const saved = get().loadouts.find((l) => l.name === name);
+              const saved = get().loadouts.find(
+                (l) => l.name === name && l.classId === c.classId,
+              );
               // A loadout only applies to its own class — gear and talents from
               // another class would sanitize away to nothing.
               if (!saved || saved.classId !== c.classId) return null;
@@ -1041,8 +1058,38 @@ export const useStore = create<Store>()(
               };
             }),
           ),
-        deleteLoadout: (name) =>
-          set((s) => ({ loadouts: s.loadouts.filter((l) => l.name !== name) })),
+        deleteLoadout: (classId, name) =>
+          set((s) => ({
+            loadouts: s.loadouts.filter((l) => !(l.name === name && l.classId === classId)),
+            // Drop assignments that pointed at it, so no boss keeps a dangling
+            // reference the equip button would silently skip.
+            bossLoadouts: Object.fromEntries(
+              Object.entries(s.bossLoadouts).map(([enc, byChar]) => [
+                enc,
+                Object.fromEntries(
+                  Object.entries(byChar).filter(
+                    ([cid, n]) => !(n === name && s.characters[cid]?.classId === classId),
+                  ),
+                ),
+              ]),
+            ),
+          })),
+
+        bossLoadouts: {},
+        assignBossLoadout: (encounterId, charId, name) =>
+          set((s) => {
+            const byChar = { ...(s.bossLoadouts[encounterId] ?? {}) };
+            if (name) byChar[charId] = name;
+            else delete byChar[charId];
+            return { bossLoadouts: { ...s.bossLoadouts, [encounterId]: byChar } };
+          }),
+        equipForBoss: (encounterId) => {
+          for (const [charId, name] of Object.entries(get().bossLoadouts[encounterId] ?? {})) {
+            // applyLoadout already no-ops on a class mismatch or a missing
+            // loadout, so a stale assignment is skipped rather than throwing.
+            get().applyLoadout(charId, name);
+          }
+        },
 
         sim: { running: false, result: null },
         simTarget: 'cinder-maw',
@@ -1660,7 +1707,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 14,
+      version: 15,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         characters: s.characters,
@@ -1668,6 +1715,7 @@ export const useStore = create<Store>()(
         loadouts: s.loadouts,
         dungeonCleared: s.dungeonCleared,
         raidRoster: s.raidRoster,
+        bossLoadouts: s.bossLoadouts,
         journal: s.journal,
         familiarity: s.familiarity,
         plans: s.plans,
@@ -1786,6 +1834,8 @@ export const useStore = create<Store>()(
         // roster and re-sorted into roster order — MUST run after `characters`
         // exists, or every selection would be filtered away as unknown.
         s.raidRoster = s.rosterOrder.filter((id) => (s.raidRoster ?? []).includes(id));
+        // (v15, slice 13: per-boss loadout assignments join.)
+        s.bossLoadouts = { ...(s.bossLoadouts ?? {}) };
         s.loadouts = (s.loadouts ?? []).map((l) => ({
           ...l,
           consumables: sanitizeConsumableSelection(l.consumables ?? []),

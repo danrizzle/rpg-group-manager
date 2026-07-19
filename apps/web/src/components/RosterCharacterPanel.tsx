@@ -13,6 +13,7 @@ import { useMemo } from 'react';
 import { CLASSES, MAKERS, POTION_STEPS, resolveGear, STANCES, useCharBuild, useStore } from '../store';
 import { resolveConsumables } from '../world/professions';
 import type { CharId } from '../world/types';
+import { LoadoutPanel } from './LoadoutPanel';
 import { TalentPanel } from './TalentPanel';
 
 const SLOTS: { slot: GearSlot; label: string }[] = [
@@ -133,7 +134,7 @@ export function RosterCharacterPanel({ charId }: { charId: CharId }) {
         </div>
       ))}
 
-      <TalentPanel charId={charId} level={10} />
+      <TalentPanel charId={charId} level={level} />
 
       <h3>Consumables ({CONSUMABLE_SLOTS} slots)</h3>
       <p className="muted">
@@ -185,6 +186,8 @@ export function RosterCharacterPanel({ charId }: { charId: CharId }) {
           </li>
         ))}
       </ul>
+
+      <LoadoutPanel charId={charId} />
     </>
   );
 }
