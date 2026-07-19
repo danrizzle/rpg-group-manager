@@ -30,6 +30,7 @@ import {
 import type { CharId } from '../world/types';
 import { resolveConsumables } from '../world/professions';
 import { LoadoutPanel } from './LoadoutPanel';
+import { RecruitBar } from './RecruitBar';
 import { RosterCharacterPanel } from './RosterCharacterPanel';
 import { TalentPanel } from './TalentPanel';
 
@@ -361,13 +362,15 @@ export function CharacterPanel() {
 
   return (
     <section className="panel">
+      <RecruitBar />
       {recruited && (
-        <div className="segmented" style={{ marginBottom: '0.5rem' }}>
+        <div className="segmented roster-switcher" style={{ marginBottom: '0.5rem' }}>
           {roster.map((c) => (
             <button
               key={c.id}
               className={`btn btn-small ${meta.id === c.id ? 'btn-active' : ''}`}
               onClick={() => setActiveChar(c.id)}
+              title={`${c.name} — ${c.classLabel} (${c.role})`}
             >
               {c.name}
             </button>

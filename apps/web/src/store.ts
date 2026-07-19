@@ -66,6 +66,7 @@ import {
   nextTier,
 } from './world/base';
 import { RECIPES_BY_ID, RESPEC_COST, resolveConsumables } from './world/professions';
+import { nextCharId, nextRecruitName, rosterSlots } from './world/roster';
 import {
   BRIDGE_COST,
   DEFAULT_MULTIPLIER,
@@ -489,6 +490,11 @@ interface Store {
   /** Which character the build panel shows. */
   activeChar: CharId;
   setActiveChar: (c: CharId) => void;
+  /**
+   * Fill an earned slot with a character of the chosen class (GDD §2: slots
+   * come from milestones, never purchase — this only spends a slot).
+   */
+  recruit: (classId: ClassId) => void;
 
   loadouts: Loadout[];
   setStance: (charId: CharId, patch: Partial<StanceConfig>) => void;
@@ -835,6 +841,28 @@ export const useStore = create<Store>()(
         rosterOrder: [...FOUNDER_CHARS],
         activeChar: 'mage',
         setActiveChar: (c) => set((s) => (s.characters[c] ? { activeChar: c } : {})),
+        recruit: (classId) =>
+          set((s) => {
+            if (!CLASSES[classId]) return {};
+            // A slot must be earned and free. Never blocks with an error — the
+            // UI only offers the button when there's room.
+            const slots = rosterSlots({ unlocks: s.unlocks, dungeonCleared: s.dungeonCleared });
+            if (s.rosterOrder.length >= slots) return {};
+            const id = nextCharId(classId, s.rosterOrder);
+            const name = nextRecruitName(
+              classId,
+              s.rosterOrder.map((c) => s.characters[c]?.name ?? ''),
+            );
+            return {
+              characters: { ...s.characters, [id]: newCharacter(classId, name) },
+              rosterOrder: [...s.rosterOrder, id],
+              // A recruit joins wherever the party already is, idle.
+              chars: {
+                ...s.chars,
+                [id]: { region: charWorld(s, 'mage').region, queue: [] },
+              },
+            };
+          }),
 
         loadouts: [],
         setStance: (charId, patch) =>
