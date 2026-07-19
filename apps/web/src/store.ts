@@ -69,6 +69,7 @@ import { RECIPES_BY_ID, RESPEC_COST, resolveConsumables } from './world/professi
 import { nextCharId, nextRecruitName, rosterSlots } from './world/roster';
 import {
   BRIDGE_COST,
+  WARCAMP_COST,
   DEFAULT_MULTIPLIER,
   GATHER_BLOCK_GAME_MS,
   GRIND_BLOCK_GAME_MS,
@@ -580,6 +581,8 @@ interface Store {
   catchUp: () => void;
   recordBossKill: (boss: BossId) => void;
   buildBridge: () => void;
+  /** Raise the Cinder Wastes access building → the Cinderforge raid. */
+  buildWarcamp: () => void;
 }
 
 const DEFAULT_UNLOCKS: Unlocks = {
@@ -587,6 +590,23 @@ const DEFAULT_UNLOCKS: Unlocks = {
   bridgeBuilt: false,
   emberwingKilled: false,
   cinderMawKilled: false,
+  raidAccess: false,
+};
+
+const DEFAULT_MATERIALS: Materials = {
+  bridgeTimber: 0,
+  sunleaf: 0,
+  emberbloom: 0,
+  forgeSeal: 0,
+};
+
+/**
+ * Encounters that hand out a trophy on a first clear. Guaranteed, not a drop
+ * table: loot rules are an open GDD question (STATUS "open design questions"),
+ * and a deterministic reward gives the Warcamp a gate without inventing them.
+ */
+const CLEAR_REWARDS: Record<string, Partial<Materials>> = {
+  vulkan: { forgeSeal: 1 },
 };
 
 /**
@@ -1238,10 +1258,22 @@ export const useStore = create<Store>()(
           }
 
           // A watched kill unlocks the next encounter.
-          const nextCleared =
-            result.result === 'kill' && encounterId && !get().dungeonCleared[encounterId]
-              ? { ...get().dungeonCleared, [encounterId]: true }
-              : get().dungeonCleared;
+          const firstClear =
+            result.result === 'kill' && encounterId && !get().dungeonCleared[encounterId];
+          const nextCleared = firstClear
+            ? { ...get().dungeonCleared, [encounterId]: true }
+            : get().dungeonCleared;
+
+          // First clear pays its trophy, if the encounter has one. Guaranteed
+          // and once — the reward exists to gate the next tier, not to farm.
+          let nextMaterials = get().materials;
+          const reward = firstClear ? CLEAR_REWARDS[encounterId] : undefined;
+          if (reward) {
+            nextMaterials = { ...nextMaterials };
+            for (const [m, n] of Object.entries(reward)) {
+              nextMaterials[m as keyof Materials] += n;
+            }
+          }
 
           set({
             fight: { ...fight, finalized: true },
@@ -1250,6 +1282,7 @@ export const useStore = create<Store>()(
             journal: nextJournal,
             familiarity: nextFamiliarity,
             dungeonCleared: nextCleared,
+            materials: nextMaterials,
           });
         },
 
@@ -1284,10 +1317,8 @@ export const useStore = create<Store>()(
         // ---- world loop ----
         view: 'map',
         setView: (v) => set({ view: v }),
-        xp: 0,
-        region: 'heartfield',
         unlocks: { ...DEFAULT_UNLOCKS },
-        materials: { bridgeTimber: 0, sunleaf: 0, emberbloom: 0 },
+        materials: { ...DEFAULT_MATERIALS },
         inventory: {},
         buildings: { ...INITIAL_BUILDINGS },
         upgradeBuilding: (id) =>
@@ -1504,6 +1535,20 @@ export const useStore = create<Store>()(
             },
           })),
 
+        buildWarcamp: () =>
+          set((s) => {
+            if (s.unlocks.raidAccess) return {};
+            const short = Object.entries(WARCAMP_COST).some(
+              ([m, n]) => (s.materials[m as keyof Materials] ?? 0) < n,
+            );
+            if (short) return {};
+            const materials = { ...s.materials };
+            for (const [m, n] of Object.entries(WARCAMP_COST)) {
+              materials[m as keyof Materials] -= n;
+            }
+            return { unlocks: { ...s.unlocks, raidAccess: true }, materials };
+          }),
+
         buildBridge: () =>
           set((s) => {
             if (s.unlocks.bridgeBuilt || s.materials.bridgeTimber < BRIDGE_COST.bridgeTimber) return {};
@@ -1516,7 +1561,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 11,
+      version: 12,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         characters: s.characters,
@@ -1565,7 +1610,7 @@ export const useStore = create<Store>()(
         // (v6, phase 4: roster + dungeon join via the unconditional backfills
         // below; saves that already killed Cinder Maw get the recruits
         // immediately via the attempts-record backfill.)
-        s.materials = { bridgeTimber: 0, sunleaf: 0, emberbloom: 0, ...(s.materials ?? {}) };
+        s.materials = { ...DEFAULT_MATERIALS, ...(s.materials ?? {}) };
         s.buildings = { ...INITIAL_BUILDINGS, ...(s.buildings ?? {}) };
         s.unlocks = { ...DEFAULT_UNLOCKS, ...(s.unlocks ?? {}) };
         if (!s.unlocks.cinderMawKilled && s.attempts?.['cinder-maw']?.best) {
@@ -1578,6 +1623,8 @@ export const useStore = create<Store>()(
         // (v8, phase-4 slice 5: boss plans join unconditionally; entries are
         // sanitized against the real party at pull/sim time, not here.)
         s.plans = { ...(s.plans ?? {}) };
+        // (v12, slice 10: `unlocks.raidAccess` and `materials.forgeSeal` join
+        // via the unconditional backfills above — both default to off/0.)
         // ---- v11 (phase-5 slice 8): the uniform `characters` record ---------
         // Elara's legacy top-level build fields and the `roster` record fold
         // into one map. The FOUNDERS KEEP THEIR IDS ('mage'/'warrior'/'priest'),

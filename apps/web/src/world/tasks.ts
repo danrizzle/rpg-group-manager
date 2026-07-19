@@ -26,6 +26,16 @@ export const MAX_CATCHUP_GAME_MS = 100 * HOUR;
 
 export const BRIDGE_COST = { bridgeTimber: 20 } as const;
 
+/**
+ * The Warcamp: the Cinder Wastes access building that opens the Cinderforge
+ * raid (GDD §5). Deliberately a ZONE construction on the bridge pattern, not a
+ * `world/base.ts` building — base buildings add capability and never gate.
+ *
+ * The forge seal is the real gate (it drops only from clearing Vulkan); the
+ * materials are the economy tail that makes it a build rather than a flag.
+ */
+export const WARCAMP_COST = { bridgeTimber: 40, emberbloom: 20, forgeSeal: 1 } as const;
+
 /** Dev world-speed presets; fast by default so the loop is testable in seconds. */
 export const MULTIPLIER_PRESETS = [
   { label: '1× (real)', value: 1 },

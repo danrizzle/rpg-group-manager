@@ -22,6 +22,13 @@ export interface Unlocks {
   emberwingKilled: boolean; // → Cinder Wastes
   /** → Ember Forge door + the Borin/Seren recruits (phase 4). */
   cinderMawKilled: boolean;
+  /**
+   * → the Cinderforge raid. Set by raising the Warcamp in the Cinder Wastes
+   * (GDD §5 "access building"), which is a ZONE construction like the bridge,
+   * not a home-base building — `world/base.ts` buildings deliberately never
+   * gate anything.
+   */
+  raidAccess: boolean;
 }
 
 /** The playable classes. Engine `classId`s — comp rules and kits key on these. */
@@ -47,6 +54,12 @@ export interface Materials {
   /** Herbs (slice 5): sunleaf grows in Heartfield, emberbloom in Ashen Foothills. */
   sunleaf: number;
   emberbloom: number;
+  /**
+   * Ember Forge trophy (slice 10). Not gathered and not crafted — clearing
+   * Vulkan grants one, so the Warcamp's real cost is "beat the dungeon" and
+   * the raid gate reads as a pre-quest rather than a material sink (GDD §5).
+   */
+  forgeSeal: number;
 }
 
 /** Crafted consumables by engine consumable id (slice 5 alchemy output). */

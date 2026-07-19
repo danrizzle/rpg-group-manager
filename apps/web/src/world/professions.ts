@@ -17,6 +17,7 @@ export const MATERIAL_LABELS: Record<keyof Materials, string> = {
   bridgeTimber: 'timber',
   sunleaf: 'sunleaf',
   emberbloom: 'emberbloom',
+  forgeSeal: 'forge seal',
 };
 
 export interface Recipe {
