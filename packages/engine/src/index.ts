@@ -4,10 +4,39 @@ export { Scheduler } from './core/scheduler';
 export type { ActorId, CombatEvent, EventType } from './core/events';
 export type { BehaviorStats, CombatStats, DamageType } from './model/stats';
 export { GCD_MS } from './model/ability';
-export type { Ability, AbilityEffect, AbilityTag } from './model/ability';
+export type {
+  Ability,
+  AbilityEffect,
+  AbilityTag,
+  BuffEffect,
+  DamageEffect,
+  HealEffect,
+  DispelType,
+  DispelEffect,
+  TauntEffect,
+  InterruptEffect,
+  ResurrectEffect,
+} from './model/ability';
 export { DEFAULT_STANCE, validateStance } from './model/stance';
 export type { StanceConfig } from './model/stance';
-export type { AddDefinition, BossDefinition, TimedBossAbility } from './model/boss';
+export type {
+  AddDefinition,
+  BossDefinition,
+  BossDebuff,
+  BossDebuffTarget,
+  Mechanic,
+  EnrageMechanic,
+  TimelineMechanic,
+  MovementMechanic,
+  AddsMechanic,
+} from './model/boss';
+export {
+  timelineMechanics,
+  movementMechanics,
+  enrageMechanic,
+  addsMechanic,
+  withEnrageAt,
+} from './model/boss';
 export type { MobDefinition, MobPackDefinition } from './model/mobPack';
 export { packBandMax } from './model/mobPack';
 export { runFight, PLAYER_ID, BOSS_ID, MAX_PARTY_SIZE, enemyStats } from './sim/engine';
@@ -55,9 +84,11 @@ export { CONSUMABLES, CONSUMABLES_BY_ID, CONSUMABLE_SLOTS } from './content/cons
 export { makeMage } from './content/classes/mage';
 export { MAGE_TALENTS, TALENT_BUILDS } from './content/classes/mageTalents';
 export { makeWarrior, warriorBaseForLevel } from './content/classes/warrior';
+export { WARRIOR_TALENTS, WARRIOR_TALENT_BUILDS } from './content/classes/warriorTalents';
 export { makePriest, priestBaseForLevel } from './content/classes/priest';
-export { applyComp, unlockedGroupCds } from './model/comp';
-export type { CompPassiveDefinition, GroupCdDefinition } from './model/comp';
+export { PRIEST_TALENTS, PRIEST_TALENT_BUILDS } from './content/classes/priestTalents';
+export { applyComp, unlockedGroupCds, checkRaidComp, CINDERFORGE_COMP_RULE } from './model/comp';
+export type { CompPassiveDefinition, GroupCdDefinition, RaidCompRule } from './model/comp';
 export { GROUP_CDS, COMP_PASSIVES } from './content/groupCds';
 export { sanitizePlan } from './model/plan';
 export type { BossPlan, PlanAction, PlanEntry, PlanTrigger, TimedCall } from './model/plan';
@@ -78,6 +109,7 @@ export {
   makeSlagmaw,
   makeVulkan,
 } from './content/dungeons/emberForge';
+export { makeCinderforge, makeAshkar, makeVael } from './content/dungeons/cinderforge';
 export { makeCinderMaw } from './content/bosses/cinderMaw';
 export { makeBanditWarlord } from './content/bosses/banditWarlord';
 export { makeEmberwing } from './content/bosses/emberwing';

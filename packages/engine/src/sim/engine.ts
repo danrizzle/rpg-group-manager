@@ -1,16 +1,24 @@
 import { EventLog, type CombatEvent } from '../core/events';
 import { Rng } from '../core/rng';
 import { Scheduler } from '../core/scheduler';
-import { GCD_MS, type Ability } from '../model/ability';
+import {
+  GCD_MS,
+  type Ability,
+  type BuffEffect,
+  type DispelEffect,
+  type GroupHealTarget,
+  type ResurrectEffect,
+  type TauntEffect,
+} from '../model/ability';
 import { Actor } from '../model/actor';
-import type { BossDefinition } from '../model/boss';
+import { addsMechanic, type BossDebuff, type BossDebuffTarget, type BossDefinition } from '../model/boss';
 import type { MobDefinition, MobPackDefinition } from '../model/mobPack';
 import type { EquippedConsumable } from '../model/consumable';
 import type { BossPlan, TimedCall } from '../model/plan';
 import { installPlan } from './planRunner';
 import { hasteMult, type BehaviorStats, type CombatStats } from '../model/stats';
 import { validateStance, type StanceConfig } from '../model/stance';
-import { chooseAction, shouldUseBurst, type AllyView } from './decision';
+import { chooseAction, selectGroupIndices, shouldUseBurst, type AllyView } from './decision';
 import {
   hesitationDelayMs,
   reactionTimeMs,
@@ -73,7 +81,7 @@ export type SoloFightSetup = FightSetup & { player: CharacterDef; stance: Stance
 
 export type EndCondition = 'bossDead' | 'allEnemiesDead';
 
-export type FightResultKind = 'kill' | 'playerDeath' | 'enrage' | 'timeout';
+export type FightResultKind = 'kill' | 'playerDeath' | 'enrage' | 'timeout' | 'retreat';
 
 export interface FightResult {
   result: FightResultKind;
@@ -85,7 +93,14 @@ const MAX_FIGHT_MS = 600_000;
 const DAMAGE_VARIANCE = 0.15;
 /** Threat generated per point of effective healing (applied to every enemy). */
 const HEAL_THREAT_COEFF = 0.5;
-export const MAX_PARTY_SIZE = 5;
+/** Raids are 10-man (GDD amendment 2026-07-18) — a hard ceiling, not headroom. */
+export const MAX_PARTY_SIZE = 10;
+/**
+ * The pre-raid ceiling (old MAX_PARTY_SIZE, and the dungeon party cap). The
+ * raid-only heal-threat clamp engages only for parties LARGER than this, so
+ * every solo / trinity / ≤5 stream is untouched by construction.
+ */
+const RAID_THREAT_CLAMP_MIN_SIZE = 5;
 
 export const PLAYER_ID = 'player';
 export const BOSS_ID = 'boss';
@@ -149,6 +164,10 @@ export class Fight {
   /** enemyId → (charId → threat). Damage feeds one table; healing feeds all. */
   private readonly threat = new Map<string, Map<string, number>>();
   private lastHealer: CharState | null = null;
+  /** enemyId → forced target (taunt): overrides threat until untilMs. */
+  private readonly forcedTarget = new Map<string, { charId: string; untilMs: number }>();
+  /** Boss casts currently mid-window (interruptible); bossScript pushes/pops. */
+  readonly activeBossCasts: { abilityId: string; cancelled: boolean }[] = [];
 
   // Plan/call trigger hooks (sim/planRunner.ts). Empty when no plan — the
   // notify calls below are then no-ops, keeping plan-less streams identical.
@@ -292,6 +311,12 @@ export class Fight {
     this.emit({ type: 'fightEnd', source: 'sim', meta: { result: kind } });
   }
 
+  /** End the fight early by retreating (GDD §3) — the party lives, consumables
+   *  spent so far are the only cost; the rest are saved by the caller. */
+  retreat(): void {
+    this.end('retreat');
+  }
+
   livingEnemies(): Actor[] {
     return [...this.enemies, ...this.adds].filter((a) => a.alive);
   }
@@ -317,13 +342,27 @@ export class Fight {
    * answers with AoE threat — falling back to the first living member.
    */
   pickTarget(enemyId: string): CharState | null {
+    // Taunt overrides threat entirely while its window is open.
+    const forced = this.forcedTarget.get(enemyId);
+    if (forced && forced.untilMs > this.scheduler.now) {
+      const c = this.chars.find((x) => x.actor.id === forced.charId && x.actor.alive);
+      if (c) return c;
+    }
     const table = this.threat.get(enemyId);
     let best: CharState | null = null;
     let bestVal = 0;
     if (table) {
+      // Raid regime only (party > 5): cap each non-tank's effective threat at
+      // the top living tank's threat on this enemy, so healers can't out-threat
+      // the tanks as their count grows. `cap === 0` (no living tank with
+      // threat) leaves everyone uncapped — fresh-add aggro drama survives. The
+      // gate never fires for any ≤5 party, so existing streams are unchanged.
+      const cap =
+        this.chars.length > RAID_THREAT_CLAMP_MIN_SIZE ? this.topTankThreat(table) : 0;
       for (const c of this.chars) {
         if (!c.actor.alive) continue;
-        const v = table.get(c.actor.id) ?? 0;
+        let v = table.get(c.actor.id) ?? 0;
+        if (cap > 0 && c.def.role !== 'tank') v = Math.min(v, cap);
         if (v > bestVal) {
           best = c;
           bestVal = v;
@@ -333,6 +372,69 @@ export class Fight {
     if (best) return best;
     if (this.lastHealer?.actor.alive) return this.lastHealer;
     return this.livingChars()[0] ?? null;
+  }
+
+  /** Highest threat on this enemy held by any living tank (0 if none). */
+  private topTankThreat(table: Map<string, number>): number {
+    let top = 0;
+    for (const c of this.chars) {
+      if (c.def.role === 'tank' && c.actor.alive) {
+        top = Math.max(top, table.get(c.actor.id) ?? 0);
+      }
+    }
+    return top;
+  }
+
+  /**
+   * A boss timeline cast applies a debuff to characters (GDD §4 type 4 — the
+   * tank-swap / dispel lever). Mirrors the character buff branch but is
+   * boss-sourced (`buffApplied`/`buffExpired` with source BOSS_ID). Only
+   * invoked when a mechanic sets `applies`, so plain bosses draw/emit nothing.
+   */
+  applyBossDebuff(debuff: BossDebuff, sourceAbilityId: string, rng: Rng): void {
+    const now = this.scheduler.now;
+    const effect: BuffEffect = {
+      kind: 'buff',
+      buffId: debuff.buffId,
+      durationMs: debuff.durationMs,
+      ...(debuff.damageMult !== undefined ? { damageMult: debuff.damageMult } : {}),
+      ...(debuff.critBonus !== undefined ? { critBonus: debuff.critBonus } : {}),
+      ...(debuff.damageTakenMult !== undefined ? { damageTakenMult: debuff.damageTakenMult } : {}),
+      ...(debuff.absorb !== undefined ? { absorb: debuff.absorb } : {}),
+      ...(debuff.maxStacks !== undefined ? { maxStacks: debuff.maxStacks } : {}),
+      ...(debuff.dispelType !== undefined ? { dispelType: debuff.dispelType } : {}),
+    };
+    for (const target of this.debuffTargets(debuff.target, rng)) {
+      if (!target.actor.alive) continue;
+      target.actor.applyBuff(effect, now);
+      this.emit({
+        type: 'buffApplied',
+        source: BOSS_ID,
+        target: target.actor.id,
+        meta: { buffId: debuff.buffId, abilityId: sourceAbilityId },
+      });
+      this.scheduler.in(debuff.durationMs, () => {
+        for (const buffId of target.actor.expireBuffs(this.scheduler.now)) {
+          this.emit({
+            type: 'buffExpired',
+            source: target.actor.id,
+            target: target.actor.id,
+            meta: { buffId },
+          });
+        }
+      });
+    }
+  }
+
+  /** Resolve a boss-debuff target mode to the affected characters. */
+  private debuffTargets(mode: BossDebuffTarget, rng: Rng): CharState[] {
+    if (mode === 'all') return this.livingChars();
+    if (mode === 'current-tank') {
+      const t = this.pickTarget(BOSS_ID);
+      return t ? [t] : [];
+    }
+    const living = this.livingChars();
+    return living.length > 0 ? [rng.pick(living)] : [];
   }
 
   // ---- Character action cycle ----------------------------------------------
@@ -352,6 +454,16 @@ export class Fight {
       }
     }
 
+    // Situational raid abilities (taunt / dispel / interrupt) fire on an auto
+    // policy (GDD §4 Law 2) — plans and calls fire them deliberately too. This
+    // is a no-op for any kit without such an ability, so existing streams are
+    // untouched.
+    const situational = this.autoSituational(char, now);
+    if (situational) {
+      this.castAbility(char, situational);
+      return;
+    }
+
     // "Stop damage!" (GDD §3): a holding character keeps healing and
     // defending, but casts nothing that would push the boss.
     const ready = kit.filter(
@@ -362,7 +474,11 @@ export class Fight {
         char.actor.isReady(a, now),
     );
     const allies: AllyView[] | undefined = this.setup.party
-      ? this.livingChars().map((c) => ({ id: c.actor.id, hpPct: c.actor.hpPct }))
+      ? this.livingChars().map((c) => ({
+          id: c.actor.id,
+          hpPct: c.actor.hpPct,
+          ...(c.def.role ? { role: c.def.role } : {}),
+        }))
       : undefined;
     let choice = chooseAction({
       ready,
@@ -479,7 +595,7 @@ export class Fight {
         }
       }
       this.lastHealer = char;
-    } else {
+    } else if (effect.kind === 'buff') {
       const targets =
         (effect.target ?? 'self') === 'party' ? this.livingChars() : [char];
       for (const target of targets) {
@@ -501,12 +617,126 @@ export class Fight {
           }
         });
       }
+    } else if (effect.kind === 'taunt') {
+      this.resolveTaunt(char, effect);
+    } else if (effect.kind === 'dispel') {
+      this.resolveDispel(char, effect);
+    } else if (effect.kind === 'interrupt') {
+      this.resolveInterrupt(char);
+    } else if (effect.kind === 'resurrect') {
+      this.resolveResurrect(char, effect);
     }
   }
 
-  private healTargets(char: CharState, mode: 'self' | 'lowest-ally' | 'party'): CharState[] {
+  /** Battle res: revive the highest-priority dead ally and restart its loop. */
+  private resolveResurrect(char: CharState, effect: ResurrectEffect): void {
+    const dead = this.chars.filter((c) => !c.actor.alive);
+    if (dead.length === 0) return;
+    const pri = (r?: string) => (r === 'healer' ? 0 : r === 'tank' ? 1 : 2);
+    const target = [...dead].sort((a, b) => pri(a.def.role) - pri(b.def.role))[0]!;
+    target.actor.resurrect(effect.hpPct);
+    target.potionPending = false;
+    target.moving = false;
+    this.emit({ type: 'resurrect', source: char.actor.id, target: target.actor.id, meta: { hpPct: effect.hpPct } });
+    // The decide loop returns on death and never reschedules — restart it.
+    this.scheduler.in(GCD_MS, () => this.decide(target));
+  }
+
+  /** Taunt: force every enemy onto the caster and leave them top-threat. */
+  private resolveTaunt(char: CharState, effect: TauntEffect): void {
+    const until = this.scheduler.now + effect.durationMs;
+    for (const enemy of this.livingEnemies()) {
+      this.forcedTarget.set(enemy.id, { charId: char.actor.id, untilMs: until });
+      // Bump the taunter above the current top so aggro sticks after the window.
+      const table = this.threat.get(enemy.id);
+      let top = 0;
+      if (table) for (const v of table.values()) top = Math.max(top, v);
+      const have = table?.get(char.actor.id) ?? 0;
+      if (top * 1.1 > have) this.addThreat(enemy.id, char.actor.id, top * 1.1 - have);
+      this.emit({ type: 'targetChanged', source: enemy.id, target: char.actor.id, meta: { reason: 'taunt' } });
+    }
+  }
+
+  /** Dispel: strip matching dispellable debuffs off the chosen ally. */
+  private resolveDispel(char: CharState, effect: DispelEffect): void {
+    const now = this.scheduler.now;
+    const target =
+      (effect.target ?? 'lowest-ally') === 'self'
+        ? char
+        : this.livingChars().find((c) => c.actor.hasDispellable(effect.dispelTypes, now));
+    if (!target) return;
+    for (const buffId of target.actor.removeBuffsOfType(effect.dispelTypes, now)) {
+      this.emit({ type: 'buffRemoved', source: char.actor.id, target: target.actor.id, meta: { buffId } });
+    }
+  }
+
+  /** Interrupt: cancel the most recent boss cast still in its window. */
+  private resolveInterrupt(char: CharState): void {
+    for (let i = this.activeBossCasts.length - 1; i >= 0; i--) {
+      const cast = this.activeBossCasts[i]!;
+      if (cast.cancelled) continue;
+      cast.cancelled = true;
+      this.emit({ type: 'interrupted', source: char.actor.id, target: BOSS_ID, meta: { abilityId: cast.abilityId } });
+      return;
+    }
+  }
+
+  /**
+   * Auto policy for the situational raid abilities (Law 2): returns the one to
+   * fire this GCD, or null. No-op for kits lacking them — hence no perturbation
+   * of existing streams. Priority: interrupt an active cast, dispel an
+   * afflicted ally, tank-swap off a heavily-stacked co-tank.
+   */
+  private autoSituational(char: CharState, now: number): Ability | null {
+    const kit = char.def.abilities;
+    const ready = (a: Ability) => char.actor.isReady(a, now) && this.charges(char, a) > 0;
+
+    const rez = kit.find((a) => a.effect.kind === 'resurrect' && ready(a));
+    if (rez && this.chars.some((c) => !c.actor.alive)) return rez;
+
+    const interrupt = kit.find((a) => a.effect.kind === 'interrupt' && ready(a));
+    if (interrupt && this.activeBossCasts.some((c) => !c.cancelled)) return interrupt;
+
+    const dispel = kit.find((a) => a.effect.kind === 'dispel' && ready(a));
+    if (dispel && dispel.effect.kind === 'dispel') {
+      const types = dispel.effect.dispelTypes;
+      if (this.livingChars().some((c) => c.actor.hasDispellable(types, now))) return dispel;
+    }
+
+    if (char.def.role === 'tank') {
+      const taunt = kit.find((a) => a.effect.kind === 'taunt' && ready(a));
+      if (taunt && this.boss) {
+        const cur = this.pickTarget(BOSS_ID);
+        if (
+          cur &&
+          cur !== char &&
+          cur.def.role === 'tank' &&
+          cur.actor.maxStackCount(now) >= 2 &&
+          char.actor.maxStackCount(now) < cur.actor.maxStackCount(now)
+        ) {
+          return taunt;
+        }
+      }
+    }
+    return null;
+  }
+
+  private healTargets(
+    char: CharState,
+    mode: 'self' | 'lowest-ally' | 'party' | GroupHealTarget,
+  ): CharState[] {
     if (mode === 'self') return [char];
     const living = this.livingChars();
+    if (typeof mode === 'object') {
+      // Bounded group heal: the maxTargets most-hurt living members, emitted in
+      // party order. At ≤ maxTargets living this returns every member in party
+      // order — byte-identical to the old whole-party 'party' heal.
+      const idx = selectGroupIndices(
+        living.map((c) => ({ hpPct: c.actor.hpPct, role: c.def.role })),
+        mode.maxTargets,
+      );
+      return idx.map((i) => living[i]!);
+    }
     if (mode === 'party') return living;
     let lowest = char;
     for (const c of living) {
@@ -548,7 +778,8 @@ export class Fight {
 
   private checkPhase(): void {
     if (!this.boss || !this.setup.boss) return;
-    if (this.phase === 1 && this.boss.hpPct * 100 <= this.setup.boss.addPhase.atHpPct) {
+    const atHpPct = addsMechanic(this.setup.boss)?.atHpPct ?? 0;
+    if (this.phase === 1 && this.boss.hpPct * 100 <= atHpPct) {
       this.phase = 2;
       this.emit({ type: 'phaseChange', source: BOSS_ID, meta: { phase: 2 } });
       this.onPhase2?.();

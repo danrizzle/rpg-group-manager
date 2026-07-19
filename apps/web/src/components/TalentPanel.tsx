@@ -1,27 +1,52 @@
-import { LEVEL_CAP, MAGE_TALENTS, talentPointsForLevel, type TalentNode } from '@rpg/engine';
-import { talentPointsRemaining, useStore } from '../store';
+import {
+  LEVEL_CAP,
+  MAGE_TALENTS,
+  PRIEST_TALENTS,
+  WARRIOR_TALENTS,
+  talentPointsForLevel,
+  type TalentNode,
+  type TalentTree,
+} from '@rpg/engine';
+import { useStore } from '../store';
+import type { WorldCharId } from '../world/types';
 import { MATERIAL_LABELS, RESPEC_COST } from '../world/professions';
 
 /**
  * The v1 talent tree (GDD §2): nodes by tier, spend/refund against the
- * cap-granted point pool. Data-driven off MAGE_TALENTS like the gear picker.
+ * cap-granted point pool. Generic over the acting character's class tree —
+ * Elara (mage) uses the top-level talent state, recruits use their roster
+ * build's talents.
  */
 
 const TIERS = [1, 2, 3] as const;
+const TREE: Record<WorldCharId, TalentTree> = {
+  mage: MAGE_TALENTS,
+  warrior: WARRIOR_TALENTS,
+  priest: PRIEST_TALENTS,
+};
 
-function nodeName(id: string): string {
-  return MAGE_TALENTS.nodes.find((n) => n.id === id)?.name ?? id;
-}
+export function TalentPanel({ charId, level }: { charId: WorldCharId; level: number }) {
+  const tree = TREE[charId];
+  const isMage = charId === 'mage';
 
-export function TalentPanel({ level }: { level: number }) {
-  const talents = useStore((s) => s.talents);
-  const spendTalent = useStore((s) => s.spendTalent);
-  const refundTalent = useStore((s) => s.refundTalent);
-  const respecTalents = useStore((s) => s.respecTalents);
+  const talents = useStore((s) => (isMage ? s.talents : s.roster[charId as 'warrior' | 'priest'].talents));
   const respecStock = useStore((s) => s.materials[RESPEC_COST.material]);
+  const spendMage = useStore((s) => s.spendTalent);
+  const refundMage = useStore((s) => s.refundTalent);
+  const respecMage = useStore((s) => s.respecTalents);
+  const spendRoster = useStore((s) => s.spendRosterTalent);
+  const refundRoster = useStore((s) => s.refundRosterTalent);
+  const respecRoster = useStore((s) => s.respecRosterTalents);
 
+  const roster = charId as 'warrior' | 'priest';
+  const spend = isMage ? spendMage : (id: string) => spendRoster(roster, id);
+  const refund = isMage ? refundMage : (id: string) => refundRoster(roster, id);
+  const respec = isMage ? respecMage : () => respecRoster(roster);
+
+  const nodeName = (id: string) => tree.nodes.find((n) => n.id === id)?.name ?? id;
   const pool = talentPointsForLevel(level);
-  const remaining = talentPointsRemaining(talents, level);
+  const spent = talents.reduce((sum, id) => sum + (tree.nodes.find((n) => n.id === id)?.cost ?? 0), 0);
+  const remaining = pool - spent;
   const respecLabel = `${RESPEC_COST.count} ${MATERIAL_LABELS[RESPEC_COST.material]}`;
   const canAffordRespec = (respecStock ?? 0) >= RESPEC_COST.count;
 
@@ -34,7 +59,7 @@ export function TalentPanel({ level }: { level: number }) {
   };
 
   const refundBlocked = (node: TalentNode): boolean =>
-    MAGE_TALENTS.nodes.some((n) => talents.includes(n.id) && (n.requires ?? []).includes(node.id));
+    tree.nodes.some((n) => talents.includes(n.id) && (n.requires ?? []).includes(node.id));
 
   return (
     <>
@@ -48,7 +73,7 @@ export function TalentPanel({ level }: { level: number }) {
             <button
               className="btn btn-small"
               disabled={talents.length === 0 || !canAffordRespec}
-              onClick={respecTalents}
+              onClick={respec}
               title={
                 canAffordRespec
                   ? `Refund all talent points for ${respecLabel} (GDD §2 "small resource cost")`
@@ -67,7 +92,7 @@ export function TalentPanel({ level }: { level: number }) {
           <div className="control" key={tier}>
             <div className="control-label">Tier {tier}</div>
             <div className="segmented">
-              {MAGE_TALENTS.nodes
+              {tree.nodes
                 .filter((n) => n.tier === tier)
                 .map((node) => {
                   const taken = talents.includes(node.id);
@@ -86,7 +111,7 @@ export function TalentPanel({ level }: { level: number }) {
                       className={`btn btn-small ${taken ? 'btn-active' : ''}`}
                       disabled={locked || blocked}
                       title={title}
-                      onClick={() => (taken ? refundTalent(node.id) : spendTalent(node.id))}
+                      onClick={() => (taken ? refund(node.id) : spend(node.id))}
                     >
                       {node.name} ({node.cost})
                     </button>

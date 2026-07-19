@@ -12,6 +12,34 @@ export interface AllyView {
   id: string;
   /** 0..1 current HP. */
   hpPct: number;
+  /** Trinity role — role-weights group-heal target selection at raid scale. */
+  role?: string;
+}
+
+/** How much a role's deficit is weighted when picking the group-heal subset. */
+const GROUP_ROLE_WEIGHT = (role: string | undefined): number => (role === 'tank' ? 1.5 : 1);
+
+/**
+ * Pick which members a bounded group heal (`{kind:'group',maxTargets}`) lands
+ * on: the `maxTargets` most-hurt living members, tanks weighted in so a dying
+ * tank is never diluted out of the subset. Returns indices into `members`
+ * (party order) IN PARTY ORDER. At `members.length <= maxTargets` it returns
+ * every index — identical to the old whole-party heal, which keeps trinity
+ * (and any ≤ maxTargets) streams byte-identical. Shared by the decision brain
+ * (scoring) and the sim (resolution) so the score and the heal never diverge.
+ */
+export function selectGroupIndices(
+  members: readonly { hpPct: number; role?: string }[],
+  maxTargets: number,
+): number[] {
+  if (members.length <= maxTargets) return members.map((_, i) => i);
+  const keyed = members.map((m, i) => ({ i, w: (1 - m.hpPct) * GROUP_ROLE_WEIGHT(m.role) }));
+  // Most-hurt (weighted) first; party index breaks ties for determinism.
+  keyed.sort((a, b) => b.w - a.w || a.i - b.i);
+  return keyed
+    .slice(0, maxTargets)
+    .map((k) => k.i)
+    .sort((a, b) => a - b); // emit in party order
 }
 
 export interface DecisionContext {
@@ -63,7 +91,14 @@ export function chooseAction(ctx: DecisionContext): Ability | null {
     const mode = a.effect.target ?? 'self';
     const weight = 0.6 + 1.2 * (1 - ctx.stance.offense);
     let deficit: number;
-    if (mode === 'party') {
+    if (typeof mode === 'object' && mode.kind === 'group') {
+      // Bounded group heal: score on the SUBSET it would actually land on
+      // (the maxTargets most-hurt), so it stays un-diluted at raid scale and
+      // reduces to the whole-party average when everyone fits.
+      const idx = selectGroupIndices(allies, mode.maxTargets);
+      const sum = idx.reduce((s, i) => s + (1 - allies[i]!.hpPct), 0);
+      deficit = (sum / idx.length) * 1.6;
+    } else if (mode === 'party') {
       // Group heals want breadth: the average deficit, boosted so they beat
       // the single heal once several members are hurt.
       const sum = allies.reduce((s, x) => s + (1 - x.hpPct), 0);

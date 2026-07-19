@@ -19,13 +19,10 @@ export function makeEmberwing(overrides?: Partial<BossDefinition>): BossDefiniti
     meleeSwingMs: 1900,
     meleeDamageType: 'physical',
 
-    // Backstop enrage far past a realistic kill time.
-    enrageAtMs: 420_000,
-    enrageDamageMult: 4,
-
-    // Fire sustain check.
-    timeline: [
+    mechanics: [
+      // Fire sustain check.
       {
+        kind: 'timeline',
         id: 'cinder-breath',
         name: 'Cinder Breath',
         firstAtMs: 30_000,
@@ -33,26 +30,28 @@ export function makeEmberwing(overrides?: Partial<BossDefinition>): BossDefiniti
         damage: 210,
         damageType: 'fire',
       },
+      // Type-2 movement windows: give ground (DPS penalty) or eat a fire hit.
+      {
+        kind: 'movement',
+        firstAtMs: 15_000,
+        everyMs: 22_000,
+        durationMs: 3500,
+        failDamage: 460,
+        failDamageType: 'fire',
+      },
+      // Backstop enrage far past a realistic kill time.
+      { kind: 'enrage', atMs: 420_000, damageMult: 4 },
+      // No add phase (atHpPct 0).
+      {
+        kind: 'adds',
+        atHpPct: 0,
+        waveEveryMs: 10_000_000,
+        addsPerWave: 0,
+        add: { name: 'Ember', hp: 1, meleeDamage: 0, meleeSwingMs: 10_000_000 },
+        tantrumAfterMs: 10_000_000,
+        tantrumDamageMult: 1,
+      },
     ],
-
-    // Type-2 movement windows: give ground (DPS penalty) or eat a fire hit.
-    movementWindows: {
-      firstAtMs: 15_000,
-      everyMs: 22_000,
-      durationMs: 3500,
-      failDamage: 460,
-      failDamageType: 'fire',
-    },
-
-    // No add phase.
-    addPhase: {
-      atHpPct: 0,
-      waveEveryMs: 10_000_000,
-      addsPerWave: 0,
-      add: { name: 'Ember', hp: 1, meleeDamage: 0, meleeSwingMs: 10_000_000 },
-      tantrumAfterMs: 10_000_000,
-      tantrumDamageMult: 1,
-    },
 
     timerJitterPct: 0.1,
     ...overrides,

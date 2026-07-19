@@ -1,4 +1,4 @@
-import { CONSUMABLES_BY_ID, PLAYER_ID, type PlanAction, type PotionNote } from '@rpg/engine';
+import { CONSUMABLES_BY_ID, enrageMechanic, PLAYER_ID, type PlanAction, type PotionNote } from '@rpg/engine';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildLog, mmss, Replay, type ActorView } from '../fight/replay';
 import { useStore, type AttemptSummary, type FightState } from '../store';
@@ -27,17 +27,21 @@ const cause = (id: string): string => id.replace(/-/g, ' ');
 
 // The live-call palette (GDD §8 Law 1: three buttons, not a piano). Each maps
 // to one or more plan actions issued at the frontier; the same arsenal the plan
-// editor exposes (§3 ground rule 1).
-const ALL_CDS: PlanAction[] = [
-  { kind: 'ability', charId: 'warrior', abilityId: 'battle-shout' },
-  { kind: 'ability', charId: 'mage', abilityId: 'combustion' },
-  { kind: 'ability', charId: 'mage', abilityId: 'pyroclasm' },
-];
-const HEAL_CD: PlanAction[] = [{ kind: 'ability', charId: 'priest', abilityId: 'divine-hymn' }];
+// editor exposes (§3 ground rule 1). Derived from the ACTUAL party's abilities
+// by tag, so comp/talent CDs (Battle Shout, Pyroclasm, Rekindle, …) appear
+// automatically instead of via hardcoded ids.
+type PartyLike = { character: { id?: string; abilities: { id: string; tags: readonly string[] }[] } }[];
+const callsFor = (party: PartyLike, tag: string): PlanAction[] =>
+  party.flatMap((m) =>
+    m.character.abilities
+      .filter((a) => a.tags.includes(tag))
+      .map((a) => ({ kind: 'ability', charId: m.character.id ?? 'player', abilityId: a.id }) as PlanAction),
+  );
 
 /** Human label for one adopted/logged call action (mirrors PlanPanel). */
 function callLabel(a: PlanAction): string {
   if (a.kind === 'holdDps') return a.hold ? 'Stop damage!' : 'Push!';
+  if (a.kind === 'retreat') return 'Retreat!';
   if (a.kind === 'stance') {
     const t = a.patch.targeting;
     return t === 1 ? 'Elara → Cleave' : t === 0 ? 'Elara → Focus' : `${a.charId}: stance`;
@@ -308,7 +312,7 @@ export function FightView() {
   const boss = fight.boss ? enemies.find((a) => a.id === 'boss') : undefined;
   const otherEnemies = enemies.filter((a) => a !== boss && (a.alive || a.hp > 0));
   const livingOthers = enemies.filter((a) => a !== boss && a.alive);
-  const enrageIn = fight.boss ? fight.boss.enrageAtMs - playT : 0;
+  const enrageIn = fight.boss ? (enrageMechanic(fight.boss)?.atMs ?? 0) - playT : 0;
 
   // Live pulls (party): the scrubber and call palette are locked to the
   // frontier until the fight resolves once; then it's a normal replay.
@@ -318,6 +322,10 @@ export function FightView() {
   const atLiveEdge = !!fight.live && !resolved && Math.abs(frontierMs - playT) < 200;
   const lastHold = [...fight.calls].reverse().find((c) => c.action.kind === 'holdDps');
   const isHolding = lastHold?.action.kind === 'holdDps' ? lastHold.action.hold : false;
+  // Roster-derived call palettes (comp/talent CDs appear automatically).
+  const party = (fight.partyMembers ?? []) as PartyLike;
+  const allCds = callsFor(party, 'burst');
+  const healCds = callsFor(party, 'heal-cd');
 
   return (
     <section className="panel fight-panel">
@@ -364,7 +372,11 @@ export function FightView() {
       {view.ended && (
         <>
           <div className={`banner ${view.ended === 'kill' ? 'banner-win' : 'banner-loss'}`}>
-            {view.ended === 'kill' ? `VICTORY — ${mmss(fight.result.durationMs)}` : `WIPE — ${view.ended}`}
+            {view.ended === 'kill'
+              ? `VICTORY — ${mmss(fight.result.durationMs)}`
+              : view.ended === 'retreat'
+                ? `RETREAT — ${mmss(fight.result.durationMs)}`
+                : `WIPE — ${view.ended}`}
           </div>
           <PostFightReview fight={fight} />
         </>
@@ -372,10 +384,10 @@ export function FightView() {
 
       {fight.live && !resolved && (
         <div className="call-palette">
-          <button className="btn btn-small" disabled={!atLiveEdge} onClick={() => issueCall(ALL_CDS)}>
+          <button className="btn btn-small" disabled={!atLiveEdge || allCds.length === 0} onClick={() => issueCall(allCds)}>
             All CDs now!
           </button>
-          <button className="btn btn-small" disabled={!atLiveEdge} onClick={() => issueCall(HEAL_CD)}>
+          <button className="btn btn-small" disabled={!atLiveEdge || healCds.length === 0} onClick={() => issueCall(healCds)}>
             Heal CD now!
           </button>
           <button className="btn btn-small" disabled={!atLiveEdge} onClick={() => issueCall([{ kind: 'holdDps', hold: !isHolding }])}>

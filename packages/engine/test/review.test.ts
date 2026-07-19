@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
+import { withEnrageAt } from '../src/model/boss';
 import { makeMage } from '../src/content/classes/mage';
 import { CONSUMABLES_BY_ID } from '../src/content/consumables';
 import { GEAR_SETS } from '../src/content/items';
@@ -92,7 +93,7 @@ describe('fightReview', () => {
   it('an enrage wipe reports how close it was', () => {
     const setup = {
       player: makeMage(undefined, GEAR_SETS['starter']!, 10, [], []),
-      boss: makeCinderMaw({ enrageAtMs: 60_000 }),
+      boss: withEnrageAt(makeCinderMaw(), 60_000),
       stance: { ...DEFAULT_STANCE },
     };
     for (let seed = 0; seed < 10; seed++) {

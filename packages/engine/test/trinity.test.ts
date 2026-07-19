@@ -6,6 +6,7 @@ import { makeEmberForge, makeSlagmaw, makeVulkan } from '../src/content/dungeons
 import { makeMage } from '../src/content/classes/mage';
 import { makePriest, priestBaseForLevel } from '../src/content/classes/priest';
 import { makeWarrior, warriorBaseForLevel } from '../src/content/classes/warrior';
+import { addsMechanic } from '../src/model/boss';
 import { applyComp, unlockedGroupCds } from '../src/model/comp';
 import { encounterById } from '../src/model/dungeon';
 import { DEFAULT_STANCE } from '../src/model/stance';
@@ -67,16 +68,15 @@ describe('trinity content integrity', () => {
     expect(d.encounters.map((e) => e.id)).toEqual(['forge-whelps', 'slagmaw', 'vulkan']);
     expect(encounterById(d, 'slagmaw')?.kind).toBe('boss');
     expect(d.partySize.min).toBe(3);
-    // Type 4 (tank swaps/dispels) must not exist yet — the model has no slot
-    // for it, so its absence is structural; assert the type-3 add phase is
-    // only on Vulkan.
-    expect(makeSlagmaw().addPhase.atHpPct).toBe(0);
-    expect(makeVulkan().addPhase.atHpPct).toBeGreaterThan(0);
+    // The type-3 add phase is only on Vulkan (Slagmaw disables it with
+    // atHpPct 0); Ember Forge content carries no type-4 debuffs yet.
+    expect(addsMechanic(makeSlagmaw())?.atHpPct).toBe(0);
+    expect(addsMechanic(makeVulkan())?.atHpPct ?? 0).toBeGreaterThan(0);
   });
 
   it('consumables fold into warrior/priest like any stat layer', () => {
     const bare = makeWarrior();
-    const warded = makeWarrior(undefined, undefined, 10, [WARD, POTION]);
+    const warded = makeWarrior(undefined, undefined, 10, [], [WARD, POTION]);
     expect(warded.stats.resistances.fire ?? 0).toBe(30);
     expect(bare.stats.resistances.fire ?? 0).toBe(0);
     expect(warded.abilities.some((a) => a.id === 'healing-potion')).toBe(true);
@@ -139,8 +139,8 @@ describe('Ember Forge balance direction (Monte Carlo)', () => {
         party: party(
           applyComp(
             [
-              makeWarrior(undefined, GEAR_SETS['warrior-starter']!, 10, [WARD]),
-              makePriest(undefined, GEAR_SETS['priest-starter']!, 10, [WARD]),
+              makeWarrior(undefined, GEAR_SETS['warrior-starter']!, 10, [], [WARD]),
+              makePriest(undefined, GEAR_SETS['priest-starter']!, 10, [], [WARD]),
               makeMage(undefined, GEAR_SETS['starter']!, 10, [], [WARD]),
             ],
             GROUP_CDS,

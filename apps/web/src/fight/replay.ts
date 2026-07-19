@@ -1,7 +1,9 @@
 import {
+  addsMechanic,
   BOSS_ID,
   CONSUMABLES_BY_ID,
   PLAYER_ID,
+  timelineMechanics,
   type BossDefinition,
   type CharacterDef,
   type CombatEvent,
@@ -179,7 +181,7 @@ export class Replay {
       }
       case 'addSpawn': {
         if (this.actors.has(e.source)) break; // pack mobs are prebuilt
-        const hp = this.cfg.boss?.addPhase.add.hp ?? 1;
+        const hp = (this.cfg.boss ? addsMechanic(this.cfg.boss)?.add.hp : undefined) ?? 1;
         this.actors.set(e.source, {
           id: e.source,
           name: String(e.meta?.['name'] ?? 'Add'),
@@ -196,6 +198,13 @@ export class Replay {
         if (src) {
           src.alive = false;
           src.hp = 0;
+        }
+        break;
+      case 'resurrect':
+        if (tgt) {
+          tgt.alive = true;
+          tgt.hp = Math.round(tgt.maxHp * Number(e.meta?.['hpPct'] ?? 0.4));
+          tgt.casting = null;
         }
         break;
       case 'movementStart':
@@ -229,7 +238,7 @@ export function buildLog(events: readonly CombatEvent[], cfg: ReplayConfig): Log
   const names: Record<string, string> = { melee: 'Melee', 'lava-surge': 'Lava Surge' };
   for (const [id, c] of Object.entries(CONSUMABLES_BY_ID)) names[id] = c.name;
   for (const p of cfg.players) for (const a of p.abilities) names[a.id] = a.name;
-  for (const t of cfg.boss?.timeline ?? []) names[t.id] = t.name;
+  for (const t of cfg.boss ? timelineMechanics(cfg.boss) : []) names[t.id] = t.name;
   const abilityName = (e: CombatEvent) => names[String(e.meta?.['abilityId'] ?? '')] ?? 'Attack';
 
   const playerIds = new Set(cfg.players.map((p) => p.id ?? PLAYER_ID));
@@ -237,8 +246,9 @@ export function buildLog(events: readonly CombatEvent[], cfg: ReplayConfig): Log
   for (const p of cfg.players) actorNames[p.id ?? PLAYER_ID] = p.name;
   if (cfg.boss) actorNames[BOSS_ID] = cfg.boss.name;
   for (const mob of cfg.pack?.mobs ?? []) actorNames[mob.id] = mob.name;
+  const addName = cfg.boss ? addsMechanic(cfg.boss)?.add.name : undefined;
   const actorName = (id: string | undefined) =>
-    (id !== undefined && actorNames[id]) || cfg.boss?.addPhase.add.name || 'Add';
+    (id !== undefined && actorNames[id]) || addName || 'Add';
 
   const lines: LogLine[] = [];
   const push = (t: number, text: string, cls: LogLine['cls']) => lines.push({ t, text, cls });
@@ -298,7 +308,7 @@ export function buildLog(events: readonly CombatEvent[], cfg: ReplayConfig): Log
       case 'phaseChange':
         push(
           e.t,
-          `— Phase ${e.meta?.['phase']}${cfg.boss ? `: ${cfg.boss.addPhase.add.name}s emerge!` : ''} —`,
+          `— Phase ${e.meta?.['phase']}${addName ? `: ${addName}s emerge!` : ''} —`,
           'system',
         );
         break;
@@ -321,6 +331,9 @@ export function buildLog(events: readonly CombatEvent[], cfg: ReplayConfig): Log
       }
       case 'death':
         push(e.t, `${actorName(e.source)} dies`, playerIds.has(e.source) ? 'mistake' : 'system');
+        break;
+      case 'resurrect':
+        push(e.t, `${actorName(e.source)} rekindles ${actorName(e.target)}!`, 'system');
         break;
       case 'enrage':
         push(e.t, `${actorName(BOSS_ID)} ENRAGES!`, 'mistake');

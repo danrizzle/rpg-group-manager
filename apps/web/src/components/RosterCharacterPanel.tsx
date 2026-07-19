@@ -13,6 +13,7 @@ import { useMemo } from 'react';
 import { POTION_STEPS, resolveGear, ROSTER_CHARS, STANCES, useStore } from '../store';
 import { resolveConsumables } from '../world/professions';
 import type { RosterCharId } from '../world/types';
+import { TalentPanel } from './TalentPanel';
 
 const SLOTS: { slot: GearSlot; label: string }[] = [
   { slot: 'weapon', label: 'Weapon' },
@@ -52,8 +53,8 @@ export function RosterCharacterPanel({ charId }: { charId: RosterCharId }) {
   // Preview at nominal charges (no inventory arg), like Elara's stat line.
   const def = useMemo(() => {
     const make = charId === 'warrior' ? makeWarrior : makePriest;
-    return make(undefined, resolveGear(build.gear), 10, resolveConsumables(build.consumables));
-  }, [charId, build.gear, build.consumables]);
+    return make(undefined, resolveGear(build.gear), 10, build.talents, resolveConsumables(build.consumables));
+  }, [charId, build.gear, build.consumables, build.talents]);
 
   const activeStance = STANCES.find((st) => st.offense === build.stance.offense);
   const fireRes = def.stats.resistances.fire ?? 0;
@@ -121,6 +122,8 @@ export function RosterCharacterPanel({ charId }: { charId: RosterCharId }) {
           </select>
         </div>
       ))}
+
+      <TalentPanel charId={charId} level={10} />
 
       <h3>Consumables ({CONSUMABLE_SLOTS} slots)</h3>
       <p className="muted">

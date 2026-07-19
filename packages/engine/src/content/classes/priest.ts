@@ -4,7 +4,9 @@ import type { BehaviorStats, CombatStats } from '../../model/stats';
 import { applyGear, foldBonuses, type Item } from '../../model/item';
 import { normalizeConsumables, type ConsumableDefinition } from '../../model/consumable';
 import { LEVEL_CAP } from '../../model/progression';
+import { applyTalents, talentPointsForLevel, validateTalentSelection } from '../../model/talent';
 import { GEAR_SETS } from '../items';
+import { PRIEST_TALENTS } from './priestTalents';
 
 /**
  * v1 Priest (GDD §2): the healer. Single/group healing plus Divine Hymn as
@@ -60,7 +62,7 @@ const KIT: Ability[] = [
     name: 'Circle of Healing',
     castTimeMs: 2500,
     cooldownMs: 12_000,
-    effect: { kind: 'heal', base: 150, coeff: 1.0, target: 'party' },
+    effect: { kind: 'heal', base: 150, coeff: 1.0, target: { kind: 'group', maxTargets: 5 } },
     tags: [],
     movementPenalty: true,
   },
@@ -69,7 +71,7 @@ const KIT: Ability[] = [
     name: 'Divine Hymn',
     castTimeMs: 0,
     cooldownMs: 180_000,
-    effect: { kind: 'heal', base: 500, coeff: 2.0, target: 'party' },
+    effect: { kind: 'heal', base: 500, coeff: 2.0, target: { kind: 'group', maxTargets: 5 } },
     tags: ['heal-cd'],
   },
   {
@@ -91,6 +93,7 @@ export function makePriest(
   behaviorOverride?: Partial<BehaviorStats>,
   gear: Item[] = GEAR_SETS['priest-default']!,
   level: number = LEVEL_CAP,
+  talents: string[] = [],
   consumables: ConsumableDefinition[] = [],
 ): CharacterDef {
   const geared = applyGear(
@@ -98,8 +101,10 @@ export function makePriest(
     { ...BASE_BEHAVIOR, ...behaviorOverride },
     gear,
   );
+  validateTalentSelection(PRIEST_TALENTS, talents, talentPointsForLevel(level));
+  const talented = applyTalents(geared.stats, geared.behavior, KIT, PRIEST_TALENTS, talents);
   const { passives, actives, summary } = normalizeConsumables(consumables);
-  const folded = foldBonuses(geared.stats, geared.behavior, passives.map((p) => p.bonuses));
+  const folded = foldBonuses(talented.stats, talented.behavior, passives.map((p) => p.bonuses));
   return {
     id: 'priest',
     name: 'Seren',
@@ -107,7 +112,7 @@ export function makePriest(
     role: 'healer',
     stats: folded.stats,
     behavior: folded.behavior,
-    abilities: [...KIT, ...actives],
+    abilities: [...talented.abilities, ...actives],
     consumables: summary,
   };
 }

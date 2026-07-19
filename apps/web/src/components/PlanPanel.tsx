@@ -1,4 +1,12 @@
-import type { BossDefinition, BossPlan, PlanAction, PlanEntry, PlanTrigger } from '@rpg/engine';
+import {
+  addsMechanic,
+  timelineMechanics,
+  type BossDefinition,
+  type BossPlan,
+  type PlanAction,
+  type PlanEntry,
+  type PlanTrigger,
+} from '@rpg/engine';
 import { useState } from 'react';
 import { mmss } from '../fight/replay';
 import { useStore, type JournalEntry } from '../store';
@@ -40,7 +48,7 @@ interface TriggerOption {
 function triggerOptions(boss: BossDefinition, entry: JournalEntry | undefined): TriggerOption[] {
   const seen = new Set(entry?.seen ?? []);
   const opts: TriggerOption[] = [{ id: 'pull', label: 'On pull', trigger: { kind: 'pull' } }];
-  for (const t of boss.timeline) {
+  for (const t of timelineMechanics(boss)) {
     if (seen.has(`timeline:${t.id}`)) {
       opts.push({
         id: `cast:${t.id}`,
@@ -50,7 +58,8 @@ function triggerOptions(boss: BossDefinition, entry: JournalEntry | undefined): 
     }
   }
   if (seen.has('adds')) {
-    opts.push({ id: 'phase2', label: `Phase 2 (${boss.addPhase.atHpPct}%)`, trigger: { kind: 'phase', phase: 2 } });
+    const atHpPct = addsMechanic(boss)?.atHpPct ?? 0;
+    opts.push({ id: 'phase2', label: `Phase 2 (${atHpPct}%)`, trigger: { kind: 'phase', phase: 2 } });
   }
   // Boss HP is on the bars from pull one — always plannable.
   for (const pct of HP_STEPS) {
@@ -66,7 +75,7 @@ function describeTrigger(t: PlanTrigger, boss: BossDefinition): string {
     case 'time':
       return `At ${mmss(t.atMs)}`;
     case 'bossCast':
-      return boss.timeline.find((x) => x.id === t.abilityId)?.name ?? t.abilityId;
+      return timelineMechanics(boss).find((x) => x.id === t.abilityId)?.name ?? t.abilityId;
     case 'phase':
       return `Phase ${t.phase}`;
     case 'bossHpBelow':
@@ -79,6 +88,7 @@ function describeAction(a: PlanAction): string {
   if (match) return match.label;
   if (a.kind === 'ability') return `${a.charId}: ${a.abilityId}`;
   if (a.kind === 'stance') return `${a.charId}: stance ${JSON.stringify(a.patch)}`;
+  if (a.kind === 'retreat') return 'Retreat!';
   return a.hold ? 'Stop damage!' : 'Push!';
 }
 

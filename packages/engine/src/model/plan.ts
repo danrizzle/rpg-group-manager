@@ -24,7 +24,9 @@ export type PlanAction =
   /** Switch a character's intent (named stance/target step, resolved to numbers). */
   | { kind: 'stance'; charId: string; patch: { offense?: number; targeting?: number } }
   /** "Stop damage!" / "Push!" — the whole party holds or resumes DPS. */
-  | { kind: 'holdDps'; hold: boolean };
+  | { kind: 'holdDps'; hold: boolean }
+  /** Retreat: end the fight early, saving remaining consumables (§3). */
+  | { kind: 'retreat' };
 
 export interface PlanEntry {
   trigger: PlanTrigger;
@@ -50,16 +52,20 @@ export interface TimedCall {
 export function sanitizePlan(plan: BossPlan, party: CharacterDef[]): BossPlan {
   const byId = new Map(party.map((c) => [c.id ?? 'player', c]));
   const entries = plan.entries.filter(({ action }) => {
-    if (action.kind === 'holdDps') return true;
+    // Party-wide actions carry no charId — keep them regardless.
+    if (action.kind === 'holdDps' || action.kind === 'retreat') return true;
     const char = byId.get(action.charId);
     if (!char) return false;
     if (action.kind === 'ability') {
       return char.abilities.some((a) => a.id === action.abilityId);
     }
-    const { offense, targeting } = action.patch;
-    if (offense !== undefined && (offense < 0 || offense > 1)) return false;
-    if (targeting !== undefined && (targeting < 0 || targeting > 1)) return false;
-    return true;
+    if (action.kind === 'stance') {
+      const { offense, targeting } = action.patch;
+      if (offense !== undefined && (offense < 0 || offense > 1)) return false;
+      if (targeting !== undefined && (targeting < 0 || targeting > 1)) return false;
+      return true;
+    }
+    return true; // unknown kinds pass through rather than crash
   });
   return { entries };
 }

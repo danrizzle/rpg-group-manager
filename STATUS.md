@@ -4,11 +4,18 @@
 
 **Phase 4 (Group content) COMPLETE — all 6 slices done (party sim, trinity +
 Ember Forge, roster/dungeon web, boss journal, boss plans, live calls).**
-Phase 5 (roster & raids) is under way on a **7-slice plan**: slice 1
-(per-character task queues) has **landed** — reordered to the front after play
-showed the recruits had no world presence. Next is slice 2 (raid-scale party,
-engine); the raid-side design questions (raid size, slot schedule, lockouts,
-loot) are still open and bind from there on. As of July 2026.
+Phase 5 (roster & raids) is on a **7-slice plan**. Slices **1–6 are landed**
+and **slice 7 is engine-complete** (raid content + comp rules; its web pull UI,
+access-building gate, and catalyst crafting are documented follow-ups):
+`MAX_PARTY_SIZE` is a hard 10 with the four size cliffs fixed; `BossDefinition`
+is a `mechanics: Mechanic[]` list; the type-4 stack (stacking tank-swap debuffs,
+taunt, dispel, interrupt, cast windows) is built and auto-answered; battle res +
+retreat work; recruits have real talent trees; and the first 10-man raid
+(**Cinderforge**) exercises the whole stack. Every solo + trinity stream stayed
+byte-identical throughout; **161 engine tests green, web typecheck + build
+clean.** Remaining before phase 6: the slice-7 web integration, a Normal≈90% /
+Heroic retune, and the open raid design questions (slot schedule, lockouts,
+loot). As of July 2026.
 
 ## Phase checklist
 
@@ -409,109 +416,200 @@ loot) are still open and bind from there on. As of July 2026.
         talent trees make it meaningful; and nothing interlocks world tasks
         with dungeon pulls — you can pull while heroes are mid-travel, which
         matches the pre-existing behaviour that pulls never checked location.
-  - [ ] **Slice 2 — Raid-scale party (engine).** `MAX_PARTY_SIZE` 5 → **10**
-        (raids are 10-man — see the resolved design question below;
-        `sim/engine.ts`, and the ceiling test in `test/party.test.ts` asserts a
-        6-member party throws, so it must move to 11 — this is not a bare
-        constant bump). The constant is trivial; the *tuning coupling* is the
-        slice, and 10-man softens every cliff without removing any of them.
-        Tune against the canonical **2 tanks / 3 healers / 5 dps** comp:
-        effect `target: 'party'` returns every living char, so a group heal
-        balanced for 3 becomes 3.3× throughput — still needs a bounded variant
-        (`{kind:'group'; maxTargets}`); heal threat feeds EVERY living enemy
-        at 0.5×, so 3 healers still out-threat the tanks; per-character
-        movement-fail rolls make "someone stands in fire" likely rather than
-        certain at 10 (needs a fails-≥N tolerance); and the healer AI averages
-        deficit over all allies (`sim/decision.ts`), so a dying tank is
-        diluted in a 10-pool average — role-weight it. Byte-identity for every
-        solo + 3-char stream. No web work.
-  - [ ] **Slice 3 — Mechanics as a list + boss-applied debuffs + enemy cast
-        windows (engine).** `BossDefinition` is today a flat record of
-        singleton mandatory fields (one `movementWindows`, one `addPhase` —
-        Slagmaw disables adds with `atHpPct: 0`), and `installBoss` is a
-        hardcoded function, not a registry. Refactor to
-        `mechanics: Mechanic[]` (discriminated union) with types 1–3
-        re-expressed as data and **all three existing bosses byte-identical**;
-        update the `redactBoss` journal-redaction path + `sim/bosses.ts`.
-        Add the missing boss→player path: `TimedBossAbility` gains an optional
-        `applies: BuffEffect` + target mode (`current-tank`/`random`/`all`) —
-        today `bossScript` can't touch `Actor.applyBuff` at all (the tantrum
-        "buff" is a cosmetic event with the real effect in a closure). Add
-        enemy **cast windows** (`castStart` + a real cast duration; today the
-        boss emits a bare `castEnd` with nothing to interrupt) — the
-        prerequisite for interrupts, deferred here from phase 4. Doing this
-        refactor BEFORE authoring tier-2 content is the whole point of the
-        slice ordering.
-  - [ ] **Slice 4 — Type-4 machinery: stacking debuffs, taunt, dispel,
-        interrupt (engine).** GDD §4 type 4 = tank-swap debuffs (hard comp
-        requirement: 2 tanks), mandatory dispels, absorb shields — raid only.
-        `applyBuff` currently **refreshes rather than stacks**, which makes the
-        canonical tank-swap design structurally impossible: add
-        `ActiveBuff.stacks` + `maxStacks` + per-stack `damageTakenMult`.
-        Taunt is a genuine engine change (`addThreat` is private, `pickTarget`
-        recomputes top threat every swing with no stickiness): add a
-        `{kind:'taunt'}` effect + a `forcedTarget` window consulted in
-        `pickTarget`, plus a `targetChanged` event — **threat is currently
-        invisible in the stream, so without it a tank swap is unobservable
-        gameplay.** Dispel: `{kind:'dispel'}` effect + `Actor.removeBuff` (no
-        such method today) + a `dispelType` category on `BuffEffect` +
-        `buffRemoved`. Absorb already exists (`BuffEffect.absorb`) — verify at
-        raid scale. Auto policies for both (Law 2). **Pre-work: fix the
-        latent `sanitizePlan` fall-through** — after the `holdDps`/`ability`
-        early returns it reads `action.patch` unguarded, so any new action
-        kind throws on every persisted plan; `describe` in `planRunner` has
-        the same unguarded fallback.
-  - [ ] **Slice 5 — Battle res + retreat (engine + web).** Per ground rule 1
-        these are the *only* two calls needing engine work beyond effects.
-        **Battle res** is `{kind:'ability'}` with a new `resurrect` effect:
-        `Actor.alive` is one-way today (nothing flips it back, and `heal()`
-        would raise HP on a corpse leaving `alive === false`), so add
-        `Actor.resurrect(hpPct)`, a `deadChars()` selector, a `resurrect`
-        event + replay handling, and — easy to miss — **restart the revived
-        character's decide loop**, which returns without rescheduling on
-        death (otherwise: revived but idle forever). Scarcity (1–2/attempt,
-        §3) rides the existing `Ability.chargesPerFight`. Note the fight ends
-        synchronously on the last death, so a res can never be issued after a
-        wipe — a design-consistent constraint worth stating in the UI.
-        **Retreat** is the one genuinely new `PlanAction` kind: `FightResult`
-        has no early-exit (`end()` is only reachable via kill/wipe/enrage/
-        timeout), so add a `'retreat'` `FightResultKind` threaded through
-        `analysis/metrics.ts`, `AttemptSummary.result` and `finalizeFight`.
-        "Saves remaining consumables" is nearly free — consumption is already
-        computed from the final stream in `finalizeFight` (slice 4.6).
-  - [ ] **Slice 6 — Loadout library + full call palette + recruit talent
-        trees (web).** Loadouts today are Elara-only, keyed by `name`, with
-        no character binding, no `behavior`, and mage-only talents. Add an
-        `id` + `charId`/`classId` scoping (applying a warrior loadout to a
-        priest currently sanitizes gear/talents to empty — a silent bad
-        failure), `behavior`, per-boss assignment, and grouping/filter UI
-        (a flat list does not survive 20 chars × N loadouts). Per §4 the
-        library **also holds boss plans**. Warrior/priest talent trees land
-        here because loadouts are meaningless without them (deferred from
-        phase 4). Full call palette (§3 catalog): the remaining offensive/
-        defensive/tactical calls incl. interrupt reassignment and tank swap —
-        all `{kind:'ability'}` actions, so this is content + UI, not engine.
-        `PlanPanel`'s 9 hardcoded actions and `FightView`'s `ALL_CDS`/
-        `HEAL_CD` literals must become **roster-derived**. Per Law 1's
-        progressive disclosure, the palette unlocks incrementally — never 15
-        buttons at once. Watch the respec cost: bulk-applying 20 loadouts
-        must not charge 20 respecs.
-  - [ ] **Slice 7 — Tier-2 raid + catalyst progression + access building
-        (content + web).** The first raid, gated behind an **access
-        building** (§5: "use it deliberately at raids and tier transitions" —
-        the bridge is the v1 precedent, escalated to profession-made
-        materials via Blacksmithing). Bosses use type-4 mechanics from
-        slices 2–3, tuned to the Law-2 targets: Normal ≥ ~90% on auto plan +
-        adequate gear; Heroic with a stat-proof ceiling no gear level
-        rescues. Catalyst model (§6): tier-2 gear is crafted with materials
-        from tier-1 content, keeping Ember Forge permanently relevant — plus
-        resist gear from older regions. Group CD `requires` counts already
-        scale, but `minDistinctRoles` is trivially true at raid size (only 3
-        roles exist) — raid comp rules want **ratios** (≥2 tanks, ≥4
-        healers). Also note the comp rule "first member of the class carries
-        the CD" is an order-dependent identity check: **reordering the roster
-        silently moves which character holds the raid CD and invalidates
-        persisted plans referencing `charId`.**
+  - [x] **Slice 2 — Raid-scale party (engine). ← LANDED.**
+        `MAX_PARTY_SIZE` 5 → **10** (raids are 10-man); the ceiling test moved
+        6→**11**. The constant is trivial; the *tuning coupling* was the slice —
+        10-man softens every cliff without removing any, so each got a fix
+        shaped to reduce to today's behavior at ≤5 (byte-identity). Tuned
+        against the canonical **2 tanks / 3 healers / 5 dps** comp.
+        **Landed:**
+        1. **Bounded group heal.** New `HealEffect.target`
+           `{kind:'group';maxTargets}` (`model/ability.ts`); a shared pure
+           `selectGroupIndices` (`sim/decision.ts`) picks the maxTargets
+           most-hurt living (tanks role-weighted in), emitted in **party
+           order**, and is used by both `healTargets` (resolution) and the
+           decision scoring (so score and heal never diverge). At ≤ maxTargets
+           living it returns every member in party order = the old whole-party
+           heal. Priest `circle-of-healing` + `divine-hymn` → `maxTargets 5`.
+        2. **Heal-threat clamp** (`pickTarget`): size-gated — for parties **> 5**
+           only, a non-tank's effective threat on an enemy is capped at the top
+           living tank's threat there (0 ⇒ uncapped, so fresh-add aggro drama
+           survives). Never runs for any ≤5 party ⇒ existing streams unchanged
+           by construction. Rejected a read-time cap keyed on tank threat (t=0
+           zero-cap flips the trinity's early stray healer-swing) and lowering
+           `HEAL_THREAT_COEFF` (can delete a stray swing in one MC seed).
+        3. **Movement fail tolerance.** Optional `movementWindows.maxSafeFails`
+           (`model/boss.ts`); `bossScript` rolls every char first (unchanged RNG
+           order) then punishes only failures **beyond** the tolerance. Absent =
+           0 = every failure punished (byte-identical). No existing boss sets it.
+        4. **Healer-AI role weight.** `AllyView.role`; role folds only into the
+           group-heal **subset selection**, not `lowest-ally`, not the score
+           magnitude — a pure no-op when all fit (trinity).
+        CLI: additive **`--raid`** tuning mode assembles the 2/3/5 comp
+        (unique ids remapped past `makeX`'s hardcoded id, tanks first) — the
+        only 10-man path; `--encounter` trinity path untouched.
+        **6 new tests** (10-man runs; 2 tanks hold vs 3 healers; group heal ≤5
+        & binds at 10; raid determinism; per-character RNG independence; fail
+        tolerance) → **132 green**. **Byte-identity verified**: all 7 solo + 3
+        trinity `--json` baselines AND full trinity event streams (5 seeds ×
+        3 encounters) diff-identical before/after; Ember Forge holds its Law-2
+        numbers (Slagmaw 97.5%, Vulkan 96.25% at `--n 400`). Web untouched
+        (typecheck + build clean). Balance below.
+  - [x] **Slice 3 — Mechanics as a list + boss-applied debuffs + enemy cast
+        windows (engine + minimal web). ← LANDED.** `BossDefinition`'s four
+        singleton slots (one `timeline`, one `movementWindows`, one `addPhase`,
+        enrage) → **`mechanics: Mechanic[]`** (discriminated union: `enrage` /
+        `timeline` / `movement` / `adds`), any count of each — raid bosses need
+        multiple windows/phases. **Landed:**
+        1. `installBoss` walks the list grouped by kind in a FIXED order
+           (melee → timeline[] → movement[] → enrage → adds), so the
+           `fork('boss')` jitter draws land in exactly the pre-list order → all
+           **5 bosses byte-identical** (proven: 11 `--json` baselines + full
+           trinity streams across 5 seeds diff-identical; Ember Forge holds
+           Slagmaw 97.5% / Vulkan 96.25%). `mechanicsOf`/`discover`/`redactBoss`
+           rewritten over the list, **same persisted key strings** (`timeline:<id>`,
+           `movement`, `enrage`, `adds`, `tantrum`); accessors
+           (`timelineMechanics`/`movementMechanics`/`enrageMechanic`/`addsMechanic`,
+           + `withEnrageAt` tuning helper) are the one place that walks the union.
+        2. **Boss-applied debuffs** (`TimelineMechanic.applies?: BossDebuff` with
+           `target: current-tank|random|all`): new `Fight.applyBossDebuff`
+           mirrors the character buff branch but boss-sourced
+           (`buffApplied`/`buffExpired`, source `BOSS_ID`); `damageTakenMult`
+           feeds `takeDamage` — the tank-swap lever (stacking is slice 4).
+           Absent = no events, no draws.
+        3. **Cast windows** (`TimelineMechanic.castDurationMs?`): `castStart` →
+           wait → `castEnd` + effect; `noteBossCast` stays at the resolution
+           site so `bossCast` plan triggers fire unchanged. Absent = instant, no
+           `castStart` (byte-identical).
+        **Web:** the 4 components that read flat boss fields
+        (`DungeonPanel`/`PlanPanel`/`replay`/`FightView`) swapped direct reads
+        for the accessors — mechanical, no behavior change (typecheck + build
+        clean). **8 new tests** (cast window emit + timing; bossCast fires at
+        resolution; debuff current-tank/all/absent; ≥2 timelines / ≥2 movement
+        windows) → **140 green**. Verified end-to-end via a raid-style boss (a
+        2.5 s Searing Brand cast applying a ×2 `damageTakenMult` to the current
+        tank, recurring). Design decisions below.
+  - [x] **Slice 4 — Type-4 machinery: stacking debuffs, taunt, dispel,
+        interrupt (engine). ← LANDED.** All four raid primitives, each purely
+        additive → **every existing stream byte-identical** (7 solo + 3 trinity
+        `--json` + full trinity event streams diff-identical). **Landed:**
+        - **Stacking**: `ActiveBuff.stacks`/`maxStacks`; `BuffEffect.maxStacks`
+          (+ `BossDebuff.maxStacks`) — `applyBuff` bumps the stack (capped) &
+          refreshes instead of replacing; `damageTakenMult` compounds as
+          `mult^stacks`. Absent/1 = refresh (byte-identical).
+        - **Taunt**: `{kind:'taunt';durationMs}` effect → a per-enemy
+          `forcedTarget` window consulted first in `pickTarget`, plus a threat
+          bump so aggro sticks after; emits **`targetChanged`** (threat is now
+          observable in the stream — a tank swap is watchable).
+        - **Dispel**: `{kind:'dispel';dispelTypes}` effect +
+          `Actor.removeBuffsOfType`/`hasDispellable` + `BuffEffect.dispelType`
+          category; emits **`buffRemoved`**.
+        - **Interrupt**: `{kind:'interrupt'}` effect cancels a boss cast still
+          in its window (`Fight.activeBossCasts` tokens set on `castStart`,
+          checked at resolve) → **`interrupted`** event, no `castEnd`, effect
+          suppressed. Builds on slice-3 cast windows.
+        - **Auto policies (Law 2)** in a new `Fight.autoSituational` (no-op for
+          kits without these abilities, so no stream perturbation): interrupt an
+          active cast, dispel an afflicted ally, tank-swap off a co-tank at ≥2
+          stacks. Plans/calls fire them explicitly via `{kind:'ability'}`.
+        - **Pre-work done**: `sanitizePlan` + `planRunner.describe` now guard
+          every action kind (no unguarded `.patch`/holdDps fall-through); the
+          `retreat` PlanAction kind + `Fight.retreat()` + `'retreat'`
+          FightResultKind landed here as the shared hook slice 5 completes.
+        New events: `targetChanged`/`buffRemoved`/`interrupted`/`resurrect`.
+        **6 new tests** (`test/type4.test.ts`: stacking cap+compound, refresh
+        parity, auto tank-swap, auto dispel, interrupt cancels the cast, plain
+        kit emits nothing) → **146 green**. Web still typecheck + build clean
+        (PlanAction `retreat` guarded in the two label helpers).
+  - [x] **Slice 5 — Battle res + retreat (engine + web). ← LANDED.** Both are
+        additive → all existing streams byte-identical (150 tests green).
+        **Battle res**: `ResurrectEffect {kind:'resurrect';hpPct}` +
+        `Actor.resurrect` (flips `alive` back, sets HP, clears buffs); the sim
+        picks the highest-priority dead ally (healer→tank→dps), emits
+        **`resurrect`**, and **restarts the revived character's decide loop**
+        (it stops on death). Scarcity via `chargesPerFight` (Rekindle = 1/fight).
+        Auto policy in `autoSituational` (revive whenever someone's down, off
+        CD/charges). Content: **Rekindle** group CD (`content/groupCds.ts`,
+        `requires: {mage:2}`, granted to the first mage) — raid-gated so the
+        1-mage trinity never gets it and its streams stay byte-identical
+        (tested). Replay revives the bar + logs "rekindles"; the res can't fire
+        after a full wipe (fight ends on the last death — a design constraint).
+        **Retreat**: `Fight.retreat()` + `'retreat'` FightResultKind (landed in
+        slice 4's pre-work) + the `{kind:'retreat'}` PlanAction, now executed by
+        `planRunner` (ends the fight early). `fightReview` treats retreat as
+        **not a wipe** (`wipe: null`); "saves remaining consumables" is free
+        (consumption is computed from the final stream, and an early exit simply
+        used fewer). Web: `finalizeFight` already handles any non-kill
+        uniformly, the live `view.ended` banner shows **RETREAT** not WIPE.
+        **8 new tests** (`test/rescue.test.ts` + `type4` retreat) covering
+        `Actor.resurrect`, auto-rez-once, the raid-gate, and the early exit.
+  - [x] **Slice 6 — Recruit talent trees + roster-derived call palette +
+        loadout scoping (web + engine content). ← LANDED.**
+        - **Warrior & Priest talent trees** (engine content:
+          `content/classes/warriorTalents.ts` + `priestTalents.ts`, 9 nodes ×
+          3 tiers each, cost 13 vs an 8-point pool). `makeWarrior`/`makePriest`
+          gain a `talents` arg (4th, consumables → 5th, matching `makeMage`);
+          empty selection folds to a **byte-identical no-op** (7 solo + 3
+          trinity streams diff-identical). Capstones grant the slice-4
+          abilities as content — Warrior → **Challenging Shout** (taunt),
+          Priest → **Purify** (dispel) + **Power Word: Barrier** (party absorb)
+          — so they never touch the trinity (opt-in via talents). Web: `talents`
+          on `RosterBuild` (+ `RosterBuildInput`, `charBuild`/`useCharBuild`,
+          `pullEncounter`, the worker, `buildSimRequest`); `spend/refund/
+          respecRosterTalent(char)` actions (respec charged once, like Elara's);
+          `TalentPanel` generalized over any `TalentTree` and rendered in
+          `RosterCharacterPanel`; persist **v10** backfills `talents: []` per
+          recruit build (sanitized against the tree).
+        - **Roster-derived call palette**: `FightView`'s hardcoded `ALL_CDS`/
+          `HEAL_CD` literals now derive from the ACTUAL party's abilities by
+          tag (`burst` / `heal-cd`), so comp/talent CDs (Battle Shout,
+          Pyroclasm, Rekindle, …) appear automatically; buttons disable when
+          the party has none.
+        - **Loadout scoping**: `Loadout.classId` added + v10 backfill (existing
+          loadouts = Elara's mage) so the model is per-class; respec is charged
+          only via the explicit respec action, so loadout-apply never charges.
+        **156 engine tests green; web typecheck + build clean.**
+        **v1 simplifications (recorded, not bugs):** the loadout LIBRARY UI
+        stays Elara-facing (the `classId`-scoped per-recruit loadout panel,
+        grouping/filter, per-boss assignment, and "library holds plans" are a
+        follow-up — the data model is ready); `PlanPanel`'s action list is
+        still partly hardcoded (the live palette is roster-derived, the plan
+        editor's curated list is not yet); progressive-disclosure gating of the
+        palette is not implemented. Recruit `behavior`/`xp` still default
+        (talents made real, the rest stays class-default).
+  - [~] **Slice 7 — Cinderforge raid + comp rules (engine content landed;
+        web raid UI + catalyst crafting deferred).** **Landed (engine):**
+        - **Cinderforge** — the first **10-man raid**
+          (`content/dungeons/cinderforge.ts`), two bosses exercising the full
+          type-4 stack, each auto-answered (Law 2, verified): **Warlord Ashkar**
+          — Molten Brand stacks a per-stack `damageTakenMult` on the current
+          tank → the off-tank auto-**taunts** to swap (5 swaps/kill measured);
+          Cinder Nova party sustain; lava vents with a fail tolerance. **Pyre-
+          Priest Vael** — Immolation Rite is a real **interruptible cast**; Hex
+          of Ash is a dispellable magic debuff the Purify healers auto-**dispel**
+          (39 cleanses/kill measured). Tuned via `--raid --boss ashkar|vael`
+          against the talented 2/3/5 comp: **100% at default gear, 96% starter**
+          (enrage backstop at 5:00; TTK ~3:30). Numbers are placeholder — a
+          tighter Normal ≈ 90% and a Heroic (stat-proof) variant are a retune
+          follow-up (the TTK distribution is too tight for a clean enrage wall
+          without survivability variance).
+        - **Comp ratio rules** (`model/comp.ts`): `checkRaidComp` +
+          `RaidCompRule` (size + `minRoles`) + `CINDERFORGE_COMP_RULE`
+          (10-man, ≥2 tanks, ≥3 healers) — the ratio check `minDistinctRoles`
+          couldn't express at raid size.
+        - **Pummel** interrupt added to the warrior tree (the interrupt content
+          that answers Immolation Rite as a knowledge lever). `--raid` gains
+          `--pnotal`; the raid comp comes specced (threat/throughput builds).
+        - CLI `--raid --boss ashkar|vael`; engine exports for the raid + comp
+          helpers. **161 engine tests green; all existing streams byte-identical.**
+        **Deferred (web, documented follow-ups):** the raid **pull UI** (10-man
+        assembly, raid view — the dungeon path is trinity-shaped today), the
+        **access building** gate (§5; add a `world/base.ts` building +
+        milestone), and the **catalyst crafting** economy (tier-2 recipes from
+        tier-1 mats; the gear tiers already exist in `content/items.ts`). Also
+        note for phase 6: the group-CD "first member of the class carries the
+        CD" is order-dependent — reordering the roster moves the raid CD and can
+        invalidate persisted plans referencing `charId`.
 - [ ] **Phase 6 — Guilds**: accounts/sync, server-authoritative real fights
       (Fastify + Postgres, same engine), guild bank, world bosses
 - [ ] **Phase 7 — Expansion stages** (as needed): traits, council/split/soak,
@@ -556,6 +654,83 @@ loot) are still open and bind from there on. As of July 2026.
   location-independent. It keeps one rule ("a task belongs to whoever you sent
   on it") and makes the crafter a real role per GDD §2. Rejected: a queue-less
   global craft lane (a second scheduling concept for one task kind).
+
+**Slice 2 (raid-scale party):**
+
+- **Every cliff fix is a no-op below raid scale, not a recalibration.** The
+  hard law is byte-identity for the 7 solo + 3 trinity streams, and the four
+  fixes touch code those streams exercise. Rather than retune and hope the
+  aggregate lands, each fix is structured to reduce EXACTLY to today's
+  behavior at ≤5 chars / ≤ maxTargets living, then verified by diffing full
+  event streams (not just `--json` aggregates) across 5 seeds × 3 encounters.
+  Rejected: tuning the numbers and accepting "close enough" — a single flipped
+  melee target in one of 2000 seeds is a broken stream.
+- **Heal-threat fix is a size gate (`chars.length > 5`), not a threat cap.**
+  A read-time cap keyed on tank threat looked cleaner but is unsafe: at t=0 the
+  top tank threat is 0, so it clamps a healer's opening heal-threat to 0 and
+  flips the trinity's documented early stray healer-swing. Lowering
+  `HEAL_THREAT_COEFF` is unsafe for the same reason (deletes a stray swing in
+  some seed). The size gate can PROVABLY never run for any existing baseline
+  (all ≤5), mirroring the "absent arg = old behavior" pattern used throughout.
+  Inside the gate, non-tanks are capped at the top living tank's threat, with
+  tanks iterated first so ties resolve to the tank. maxTargets ≥ 3 is the
+  matching invariant for the group heal.
+- **Group-heal selection and its decision score share one helper.** Two copies
+  (one to pick heal targets, one to score the ability) would drift at raid
+  scale — the brain could value a heal it won't actually cast. `selectGroupIndices`
+  is the single source; the score averages the deficit of the SUBSET it will
+  land on, which un-dilutes at raid scale and equals the old whole-party
+  average when everyone fits. Rejected: scoring on the whole raid (the
+  dilution bug the slice exists to fix).
+- **Role-weighting rides the subset selection only.** Weighting `lowest-ally`
+  or the score magnitude would change trinity decisions; weighting only WHO
+  enters the bounded subset is inert when everyone fits (≤ maxTargets), so it
+  costs zero byte-identity while still pulling a dying tank into the heal at
+  10. Tank weight 1.5 (placeholder-tunable).
+- **`--raid` is additive dev tooling, not a content boss.** There is no raid
+  boss until slice 7, so the 10-man is measured against scaled existing bosses
+  purely to confirm the mechanics (tanks hold ~5× the party's damage-taken vs
+  3 healers; group heal bounded). Rejected: authoring a placeholder raid boss
+  now (content belongs in slice 7 after the mechanics list refactor).
+
+**Slice 3 (mechanics as a list + debuffs + cast windows):**
+
+- **`installBoss` processes mechanics grouped by kind, not in list order.**
+  The `fork('boss')` RNG draws (timeline `firstAtMs` jitters, then movement
+  `firstAtMs`) are position-sensitive: any reordering shifts every later draw
+  and breaks byte-identity. Grouping by kind in the fixed melee→timeline→
+  movement→enrage→adds order reproduces the pre-list draw sequence regardless
+  of how a boss author orders its mechanics array. Rejected: iterating the
+  array in author order (byte-identity would depend on every content literal's
+  ordering — a silent trap).
+- **Unseen mechanics are DROPPED (timeline) or NO-OP'd (movement/enrage/adds)
+  in `redactBoss`, not uniformly dropped.** The old redaction kept singleton
+  slots present as no-ops, which the dummy sim relied on (a no-op movement
+  still draws its install jitter). Keeping that shape for movement/enrage/adds
+  means full knowledge reproduces the true fight byte-for-byte (the guard
+  test) and partial knowledge matches the old dummy-sim structure; timelines
+  were always an array and are still filtered out. Rejected: dropping all
+  unseen mechanics (would change the dummy-sim RNG shape vs. the shipped
+  behavior).
+- **Cast windows keep `noteBossCast` at the resolution site.** A `bossCast`
+  plan trigger must fire when the cast *lands* (its observable moment), not at
+  `castStart`; moving the hook would shift every bossCast-driven plan (e.g.
+  Vulkan's hold-DPS resume) and break its byte-identity. Cast duration is
+  opt-in per timeline ability, so plain bosses emit no `castStart` at all.
+- **Boss debuffs reuse `Actor.applyBuff` via a new `Fight.applyBossDebuff`,
+  not a new buff system.** `applyBuff` is already actor-agnostic; the only gap
+  was a boss-sourced entry point emitting `buffApplied`/`buffExpired` with
+  source `BOSS_ID` and a target mode the `BuffEffect` union doesn't express
+  (`current-tank`/`random`/`all`). Stacking stays out (slice 4 adds
+  `ActiveBuff.stacks`); v1 debuffs refresh, which is enough for the tank-swap
+  lever. Rejected: folding boss targeting into `BuffEffect.target` (conflates
+  the character self/party modes with enemy→player modes).
+- **The list refactor necessarily touched the web** (journal/plan/replay/
+  FightView read the flat fields), so slice 3 is engine + a mechanical web
+  migration to the engine accessors — chosen over keeping the flat fields as
+  derived getters (getters don't survive the `...def` spreads in `redactBoss`/
+  `makeX`) or a two-representation hybrid. The mechanic-key strings are a
+  persisted (v7) contract and were preserved exactly.
 
 ## Phase 5 — open design questions (GDD gaps to resolve before the raid slices)
 
@@ -605,11 +780,31 @@ back-filled into DESIGN.md rather than living only here.
    catalog contains no dispel call. Decide whether dispels are auto-only
    (Law 2), plan-assignable, or get a palette button.
 
+## Balance state (raid scale, phase-5 slice 2)
+
+No raid boss exists yet (slice 7), so the 10-man is measured against scaled
+existing bosses purely to confirm the mechanics behave. Canonical comp
+**2 tanks / 3 healers / 5 dps**, default gear, `--raid` CLI (seed 42):
+
+| Boss | Setup | Result | Note |
+|---|---|---|---|
+| Slagmaw | default (hp 62k) | 100%, TTK 1:01 | 10-man facerolls 3-char content (expected) |
+| Slagmaw | hp 200k, enrage off | 100%, TTK 3:20 | sustained eruption pressure — healers hold |
+
+Threat check (hp 200k run): tanks take **~15k** damage each vs **~3.9k**
+(healers) / **~3.4k** (dps) — the size-gated clamp holds the boss on the two
+tanks even against 3 healers; non-tank damage-taken is party-wide eruption,
+not melee. Group heal (`circle-of-healing`/`divine-hymn`, `maxTargets 5`)
+lands on ≤5 of the 10 per cast (tested). These are mechanic-sanity numbers,
+not a Law-2 gate — the kill-% wall arrives with slice-7 raid content.
+
 ## Balance state (Ember Forge, phase-4 slice 2)
 
-Trinity = Warrior + Priest + Mage via `applyComp` (Battle Shout at pull,
-Well-Drilled +5 discipline). `--n 400`, seed 42, CLI stance defaults
-(offense 0.6, targeting 0.5, potion <35%), no plan (slice 5 adds plans):
+**Unchanged by slice 2 — the trinity streams are byte-identical** (verified by
+full-stream diff, not just aggregates). Trinity = Warrior + Priest + Mage via
+`applyComp` (Battle Shout at pull, Well-Drilled +5 discipline). `--n 400`,
+seed 42, CLI stance defaults (offense 0.6, targeting 0.5, potion <35%), no
+plan (slice 5 adds plans):
 
 | Encounter | Setup | Kill rate | Note |
 |---|---|---|---|

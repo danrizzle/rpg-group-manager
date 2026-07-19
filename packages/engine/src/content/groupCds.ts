@@ -23,6 +23,24 @@ export const GROUP_CDS: GroupCdDefinition[] = [
     },
     desc: 'A warrior in the party: +10% damage for everyone for 12 s (burst window).',
   },
+  {
+    id: 'rekindle',
+    name: 'Rekindle',
+    // Raid-gated (a second caster carries the wipe-saver): the 3-char trinity
+    // has one mage, so this never unlocks there and its streams stay identical.
+    requires: { mage: 2 },
+    grantsTo: 'mage',
+    ability: {
+      id: 'rekindle',
+      name: 'Rekindle',
+      castTimeMs: 0,
+      cooldownMs: 600_000, // once per fight
+      chargesPerFight: 1,
+      effect: { kind: 'resurrect', hpPct: 0.4 },
+      tags: ['battle-res'],
+    },
+    desc: 'Two casters present: revive a fallen ally once per fight at 40% HP (GDD §3 battle res).',
+  },
 ];
 
 export const COMP_PASSIVES: CompPassiveDefinition[] = [

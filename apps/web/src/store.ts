@@ -6,6 +6,8 @@ import {
   GROUP_CDS,
   ITEMS_BY_ID,
   MAGE_TALENTS,
+  WARRIOR_TALENTS,
+  PRIEST_TALENTS,
   PLAYER_ID,
   applyComp,
   discover,
@@ -38,6 +40,7 @@ import {
   type PlanAction,
   type PlanTrigger,
   type StanceConfig,
+  type TalentTree,
   type TimedCall,
 } from '@rpg/engine';
 import { create } from 'zustand';
@@ -159,6 +162,12 @@ export interface Loadout {
   gear: GearSelection;
   /** Equipped consumable slot ids (may repeat, e.g. 2× healing-potion). */
   consumables: string[];
+  /**
+   * Which class this loadout targets — applying it to a different class would
+   * sanitize gear/talents to nothing. v1 loadouts are Elara's (mage); the
+   * library-per-character UI is a follow-up, but the model is scoped now.
+   */
+  classId: WorldCharId;
 }
 
 /** Repair a consumable slot list against current content and the slot cap. */
@@ -176,6 +185,8 @@ export interface RosterBuild {
   gear: GearSelection;
   /** Equipped consumable slot ids (shared bank pool feeds the whole party). */
   consumables: string[];
+  /** Recruit talent selection (slice 6; their own tree per class). */
+  talents: string[];
 }
 
 export const DEFAULT_ROSTER: Record<RosterCharId, RosterBuild> = {
@@ -183,12 +194,20 @@ export const DEFAULT_ROSTER: Record<RosterCharId, RosterBuild> = {
     stance: { ...AUTO_PRESET },
     gear: { weapon: 'militia-blade', chest: 'padded-hauberk', ring: 'band-of-vigor', trinket: 'lucky-charm' },
     consumables: [],
+    talents: [],
   },
   priest: {
     stance: { ...AUTO_PRESET },
     gear: { weapon: 'novice-crook', chest: 'acolyte-robe', ring: 'band-of-clarity', trinket: 'lucky-charm' },
     consumables: [],
+    talents: [],
   },
+};
+
+/** The talent tree for a roster class (slice 6). */
+export const ROSTER_TALENT_TREES: Record<RosterCharId, TalentTree> = {
+  warrior: WARRIOR_TALENTS,
+  priest: PRIEST_TALENTS,
 };
 
 /** What the journal remembers of the last failed attempt (GDD §4 ⚰ line). */
@@ -211,7 +230,11 @@ export const ROSTER_CHARS: { id: RosterCharId; name: string; classLabel: string;
 ];
 
 /** Repair a persisted roster build against current content. */
-function sanitizeRosterBuild(build: Partial<RosterBuild> | undefined, fallback: RosterBuild): RosterBuild {
+function sanitizeRosterBuild(
+  build: Partial<RosterBuild> | undefined,
+  fallback: RosterBuild,
+  tree?: TalentTree,
+): RosterBuild {
   const gear = { ...fallback.gear, ...(build?.gear ?? {}) };
   for (const [slot, id] of Object.entries(gear)) {
     if (id && !ITEMS_BY_ID[id]) gear[slot as GearSlot] = '';
@@ -220,6 +243,9 @@ function sanitizeRosterBuild(build: Partial<RosterBuild> | undefined, fallback: 
     stance: { ...fallback.stance, ...(build?.stance ?? {}) },
     gear,
     consumables: sanitizeConsumableSelection(build?.consumables ?? []),
+    talents: tree
+      ? sanitizeTalentSelection(tree, build?.talents ?? [], talentPointsForLevel(10))
+      : [...(build?.talents ?? [])],
   };
 }
 
@@ -286,11 +312,13 @@ export function buildSimRequest(
                 stance: s.roster.warrior.stance,
                 gear: s.roster.warrior.gear,
                 consumables: [...s.roster.warrior.consumables],
+                talents: [...s.roster.warrior.talents],
               },
               priest: {
                 stance: s.roster.priest.stance,
                 gear: s.roster.priest.gear,
                 consumables: [...s.roster.priest.consumables],
+                talents: [...s.roster.priest.talents],
               },
             },
             familiarity: { warrior: fam('warrior'), priest: fam('priest'), mage: fam('mage') },
@@ -394,6 +422,9 @@ interface Store {
   setRosterStance: (char: RosterCharId, patch: Partial<StanceConfig>) => void;
   setRosterGear: (char: RosterCharId, slot: GearSlot, itemId: string) => void;
   setRosterConsumableSlot: (char: RosterCharId, slot: number, id: string) => void;
+  spendRosterTalent: (char: RosterCharId, id: string) => void;
+  refundRosterTalent: (char: RosterCharId, id: string) => void;
+  respecRosterTalents: (char: RosterCharId) => void;
   /** Which character the build panel shows ('elara' = the legacy fields). */
   activeChar: 'elara' | RosterCharId;
   setActiveChar: (c: 'elara' | RosterCharId) => void;
@@ -534,12 +565,9 @@ function charBuild(
     behavior: { ...DEFAULT_BEHAVIOR },
     gear: build.gear,
     level: 10,
-    talents: [],
+    talents: build.talents,
   };
 }
-
-/** Stable empty talent list — recruits have no tree until phase-5 slice 6. */
-const NO_TALENTS: string[] = [];
 
 /**
  * React-side twin of `charBuild`. Each field is selected separately so every
@@ -557,7 +585,7 @@ export function useCharBuild(charId: WorldCharId): {
   const stance = useStore((s) => (charId === 'mage' ? s.stance : s.roster[charId].stance));
   const gear = useStore((s) => (charId === 'mage' ? s.gear : s.roster[charId].gear));
   const behavior = useStore((s) => (charId === 'mage' ? s.behavior : DEFAULT_BEHAVIOR));
-  const talents = useStore((s) => (charId === 'mage' ? s.talents : NO_TALENTS));
+  const talents = useStore((s) => (charId === 'mage' ? s.talents : s.roster[charId].talents));
   const level = useStore((s) => (charId === 'mage' ? levelForXp(s.xp) : 10));
   return { stance, gear, behavior, talents, level };
 }
@@ -659,6 +687,7 @@ export const useStore = create<Store>()(
               talents: [...s.talents],
               gear: { ...s.gear },
               consumables: [...s.equippedConsumables],
+              classId: 'mage',
             };
             const others = s.loadouts.filter((l) => l.name !== name);
             return { loadouts: [...others, loadout] };
@@ -766,8 +795,8 @@ export const useStore = create<Store>()(
 
         // ---- roster & dungeon (phase 4) ----
         roster: {
-          warrior: sanitizeRosterBuild(undefined, DEFAULT_ROSTER.warrior),
-          priest: sanitizeRosterBuild(undefined, DEFAULT_ROSTER.priest),
+          warrior: sanitizeRosterBuild(undefined, DEFAULT_ROSTER.warrior, WARRIOR_TALENTS),
+          priest: sanitizeRosterBuild(undefined, DEFAULT_ROSTER.priest, PRIEST_TALENTS),
         },
         setRosterStance: (char, patch) =>
           set((s) => ({
@@ -794,6 +823,35 @@ export const useStore = create<Store>()(
                 ...s.roster,
                 [char]: { ...s.roster[char], consumables: slots.filter((x) => x !== '') },
               },
+            };
+          }),
+        spendRosterTalent: (char, id) =>
+          set((s) => {
+            const tree = ROSTER_TALENT_TREES[char];
+            const cur = s.roster[char].talents;
+            const node = tree.nodes.find((n) => n.id === id);
+            if (!node || cur.includes(id)) return {};
+            if ((node.requires ?? []).some((req) => !cur.includes(req))) return {};
+            const spent = cur.reduce((sum, t) => sum + (tree.nodes.find((n) => n.id === t)?.cost ?? 0), 0);
+            if (node.cost > talentPointsForLevel(10) - spent) return {};
+            return { roster: { ...s.roster, [char]: { ...s.roster[char], talents: [...cur, id] } } };
+          }),
+        refundRosterTalent: (char, id) =>
+          set((s) => {
+            const tree = ROSTER_TALENT_TREES[char];
+            const cur = s.roster[char].talents;
+            if (!cur.includes(id)) return {};
+            const dependent = tree.nodes.some((n) => cur.includes(n.id) && (n.requires ?? []).includes(id));
+            if (dependent) return {};
+            return { roster: { ...s.roster, [char]: { ...s.roster[char], talents: cur.filter((t) => t !== id) } } };
+          }),
+        respecRosterTalents: (char) =>
+          set((s) => {
+            if (s.roster[char].talents.length === 0) return {};
+            if ((s.materials[RESPEC_COST.material] ?? 0) < RESPEC_COST.count) return {};
+            return {
+              roster: { ...s.roster, [char]: { ...s.roster[char], talents: [] } },
+              materials: { ...s.materials, [RESPEC_COST.material]: s.materials[RESPEC_COST.material] - RESPEC_COST.count },
             };
           }),
         activeChar: 'elara',
@@ -842,12 +900,14 @@ export const useStore = create<Store>()(
                 { discipline: DEFAULT_BEHAVIOR.discipline + fam('warrior') },
                 resolveGear(roster.warrior.gear),
                 10,
+                roster.warrior.talents,
                 wCons,
               ),
               makePriest(
                 { discipline: DEFAULT_BEHAVIOR.discipline + fam('priest') },
                 resolveGear(roster.priest.gear),
                 10,
+                roster.priest.talents,
                 pCons,
               ),
               makeMage(
@@ -1291,7 +1351,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 9,
+      version: 10,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         stance: s.stance,
@@ -1344,9 +1404,11 @@ export const useStore = create<Store>()(
         if (!s.unlocks.cinderMawKilled && s.attempts?.['cinder-maw']?.best) {
           s.unlocks.cinderMawKilled = true;
         }
+        // (v10, phase-5 slice 6: recruit `talents` join each roster build via
+        // the unconditional backfill below; pre-v10 builds start with [].)
         s.roster = {
-          warrior: sanitizeRosterBuild(s.roster?.warrior, DEFAULT_ROSTER.warrior),
-          priest: sanitizeRosterBuild(s.roster?.priest, DEFAULT_ROSTER.priest),
+          warrior: sanitizeRosterBuild(s.roster?.warrior, DEFAULT_ROSTER.warrior, WARRIOR_TALENTS),
+          priest: sanitizeRosterBuild(s.roster?.priest, DEFAULT_ROSTER.priest, PRIEST_TALENTS),
         };
         s.dungeonCleared = { ...(s.dungeonCleared ?? {}) };
         // (v7, phase-4 slice 4: journal + familiarity join unconditionally.)
@@ -1365,6 +1427,8 @@ export const useStore = create<Store>()(
         s.loadouts = (s.loadouts ?? []).map((l) => ({
           ...l,
           consumables: sanitizeConsumableSelection(l.consumables ?? []),
+          // (v10, slice 6: existing loadouts are Elara's.)
+          classId: l.classId ?? 'mage',
         }));
         // (v9, phase-5 slice 1: per-character world presence joins
         // unconditionally.) The pre-v9 save had ONE queue and ONE position —

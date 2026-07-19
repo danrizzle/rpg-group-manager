@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
+import { withEnrageAt } from '../src/model/boss';
 import { makeMage } from '../src/content/classes/mage';
 import { CONSUMABLES, CONSUMABLES_BY_ID, CONSUMABLE_SLOTS } from '../src/content/consumables';
 import { GEAR_SETS } from '../src/content/items';
@@ -206,7 +207,7 @@ describe('consumables move outcomes (Monte Carlo)', () => {
 
   it('the fire ward trades nothing for fewer deaths past the enrage wall', () => {
     // enrage pushed out so deaths are measured unbiased (CLAUDE.md caveat).
-    const boss = makeCinderMaw({ enrageAtMs: 900_000 });
+    const boss = withEnrageAt(makeCinderMaw(), 900_000);
     const base = { boss, stance: { ...DEFAULT_STANCE } };
     const deaths = (r: ReturnType<typeof runMonteCarlo>) =>
       (r.lossBreakdown as Record<string, number>)['playerDeath'] ?? 0;

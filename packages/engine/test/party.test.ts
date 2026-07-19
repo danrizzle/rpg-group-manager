@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
+import { makeSlagmaw } from '../src/content/dungeons/emberForge';
+import { withEnrageAt } from '../src/model/boss';
 import { makeHeartfieldPack } from '../src/content/mobs/zones';
 import { makeMage } from '../src/content/classes/mage';
+import { makeWarrior } from '../src/content/classes/warrior';
+import { makePriest } from '../src/content/classes/priest';
 import { Actor } from '../src/model/actor';
 import type { Ability } from '../src/model/ability';
 import type { BehaviorStats, CombatStats } from '../src/model/stats';
@@ -139,11 +143,11 @@ describe('party fights', () => {
     const dupes = trinity();
     dupes[1] = { ...dupes[1]!, character: { ...dupes[1]!.character, id: 'tank' } };
     expect(() => runFight({ party: dupes, boss: makeCinderMaw(), seed: 1 })).toThrow(/duplicate/);
-    const six = Array.from({ length: 6 }, (_, i) => ({
+    const eleven = Array.from({ length: 11 }, (_, i) => ({
       character: { ...makeTank(), id: `t${i}` },
       stance: { ...DEFAULT_STANCE },
     }));
-    expect(() => runFight({ party: six, boss: makeCinderMaw(), seed: 1 })).toThrow(/party size/);
+    expect(() => runFight({ party: eleven, boss: makeCinderMaw(), seed: 1 })).toThrow(/party size/);
   });
 
   it('high-threat tank abilities hold the boss: melee lands on the tank', () => {
@@ -243,6 +247,150 @@ describe('party fights', () => {
     const r = runFight({ player: makeMage(), stance: { ...DEFAULT_STANCE }, boss: makeCinderMaw(), seed: 42 });
     expect(r.events.some((e) => e.type === 'join')).toBe(false);
     expect(summarizeRun(r).perCharacter).toBeUndefined();
+  });
+});
+
+describe('raid-scale party (10-man)', () => {
+  // Real canonical comp — 2 tanks / 3 healers / 5 dps, unique ids, tanks first.
+  const realRaid = (): PartyMember[] => {
+    const mk = (make: () => CharacterDef, cls: string, count: number): PartyMember[] =>
+      Array.from({ length: count }, (_, i) => ({
+        character: { ...make(), id: `${cls}${i}` },
+        stance: { ...DEFAULT_STANCE },
+      }));
+    return [...mk(makeWarrior, 'warrior', 2), ...mk(makePriest, 'priest', 3), ...mk(makeMage, 'mage', 5)];
+  };
+
+  // Controlled test kits at raid scale (tanks first — the clamp holds by order).
+  const kitRaid = (): PartyMember[] => [
+    ...Array.from({ length: 2 }, (_, i) => ({ character: { ...makeTank(), id: `tank${i}` }, stance: { ...DEFAULT_STANCE } })),
+    ...Array.from({ length: 3 }, (_, i) => ({ character: { ...makeHealer(), id: `healer${i}` }, stance: { ...DEFAULT_STANCE } })),
+    ...Array.from({ length: 5 }, (_, i) => ({ character: { ...makeDps(), id: `mage${i}` }, stance: { ...DEFAULT_STANCE } })),
+  ];
+
+  it('a full 10-man raid runs to a real result with 10 join events', () => {
+    const r = runFight({ party: realRaid(), boss: makeSlagmaw(), seed: 3 });
+    expect(['kill', 'playerDeath', 'enrage', 'timeout']).toContain(r.result);
+    const joins = r.events.filter((e) => e.type === 'join');
+    expect(joins).toHaveLength(10);
+    expect(joins.slice(0, 2).every((e) => e.meta?.['role'] === 'tank')).toBe(true);
+  });
+
+  it('is fully deterministic at raid size: same seed, identical stream', () => {
+    const setup: FightSetup = { party: realRaid(), boss: makeSlagmaw({ hp: 120_000 }), seed: 11 };
+    const a = runFight(setup);
+    const b = runFight(setup);
+    expect(a.result).toBe(b.result);
+    expect(a.events).toEqual(b.events);
+  });
+
+  it('2 tanks hold threat against 3 healers: melee lands on a tank', () => {
+    const party = kitRaid();
+    const tankIds = new Set(['tank0', 'tank1']);
+    let tankHits = 0;
+    let otherHits = 0;
+    for (let seed = 0; seed < 4; seed++) {
+      const r = runFight({ party, boss: makeCinderMaw({ hp: 300_000 }), seed });
+      for (const e of r.events) {
+        if (e.type !== 'damage' || e.source !== 'boss' || e.meta?.['abilityId'] !== 'melee') continue;
+        if (e.target !== undefined && tankIds.has(e.target)) tankHits++;
+        else otherHits++;
+      }
+    }
+    expect(tankHits).toBeGreaterThan(30);
+    // Three healers can never out-threat the tanks once the clamp engages.
+    expect(otherHits / (tankHits + otherHits)).toBeLessThan(0.02);
+  });
+
+  it('the bounded group heal lands on at most maxTargets (5), and binds at 10', () => {
+    const r = runFight({ party: realRaid(), boss: withEnrageAt(makeSlagmaw({ hp: 250_000 }), 10_000_000), seed: 5 });
+    // (source, abilityId, t) identifies one cast; count its heal targets.
+    const perCast = new Map<string, number>();
+    for (const e of r.events) {
+      if (e.type !== 'heal') continue;
+      const ab = e.meta?.['abilityId'];
+      if (ab !== 'circle-of-healing' && ab !== 'divine-hymn') continue;
+      const key = `${e.source}|${String(ab)}|${e.t}`;
+      perCast.set(key, (perCast.get(key) ?? 0) + 1);
+    }
+    const counts = [...perCast.values()];
+    expect(counts.length).toBeGreaterThan(0);
+    expect(counts.every((c) => c <= 5)).toBe(true);
+    // With 10 alive the whole-party heal would hit 10; the bound picks 5.
+    expect(Math.max(...counts)).toBe(5);
+  });
+
+  it('adding a member does not perturb the others (per-character RNG independence)', () => {
+    // A boss that can neither die nor kill: no timeline, no movement, huge HP,
+    // enrage past the fight cap → times out at 600 s with everyone alive, so the
+    // observed mage never takes damage and its actions come only from its own
+    // fork. Appending a member LAST leaves every existing char:${id} fork intact.
+    const inertBoss = makeCinderMaw({
+      hp: 50_000_000,
+      meleeDamage: 5,
+      meleeSwingMs: 2000,
+      // Only a far-off enrage: no timeline/movement/adds, so the observed mage
+      // is never hurt and its actions come only from its own fork.
+      mechanics: [{ kind: 'enrage', atMs: 10_000_000, damageMult: 8 }],
+    });
+    // A 9-member base so base + the appended extra is a legal 10-man.
+    const base: PartyMember[] = [
+      ...Array.from({ length: 2 }, (_, i) => ({ character: { ...makeTank(), id: `tank${i}` }, stance: { ...DEFAULT_STANCE } })),
+      ...Array.from({ length: 2 }, (_, i) => ({ character: { ...makeHealer(), id: `healer${i}` }, stance: { ...DEFAULT_STANCE } })),
+      ...Array.from({ length: 5 }, (_, i) => ({ character: { ...makeDps(), id: `mage${i}` }, stance: { ...DEFAULT_STANCE } })),
+    ];
+    const extra: PartyMember = { character: { ...makeHealer(), id: 'healer-extra' }, stance: { ...DEFAULT_STANCE } };
+    const own = (r: ReturnType<typeof runFight>, id: string) =>
+      r.events.filter((e) => e.source === id).map((e) => ({ t: e.t, type: e.type, value: e.value, meta: e.meta }));
+    const a = runFight({ party: base, boss: inertBoss, seed: 21 });
+    const b = runFight({ party: [...base, extra], boss: inertBoss, seed: 21 });
+    expect(own(a, 'mage0')).toEqual(own(b, 'mage0'));
+    // Sanity: the observed mage really acted and never died.
+    expect(own(a, 'mage0').length).toBeGreaterThan(10);
+    expect(a.events.some((e) => e.type === 'death' && e.source === 'mage0')).toBe(false);
+  });
+
+  it('movement fail tolerance forgives up to maxSafeFails, punishes the rest', () => {
+    // Rookie discipline → many fail-to-move rolls succeed at failing; a boss
+    // whose only threat is one movement window lets us count the punishments.
+    const clumsy = (): PartyMember[] =>
+      Array.from({ length: 10 }, (_, i) => ({
+        character: { ...makeDps(), id: `m${i}`, behavior: behavior({ discipline: 0 }) },
+        stance: { ...DEFAULT_STANCE },
+      }));
+    const bossWith = (maxSafeFails?: number) =>
+      makeCinderMaw({
+        hp: 50_000_000,
+        meleeDamage: 0,
+        mechanics: [
+          {
+            kind: 'movement',
+            firstAtMs: 2000,
+            everyMs: 10_000_000,
+            durationMs: 1000,
+            failDamage: 100,
+            failDamageType: 'fire',
+            ...(maxSafeFails !== undefined ? { maxSafeFails } : {}),
+          },
+          { kind: 'enrage', atMs: 10_000_000, damageMult: 8 },
+        ],
+      });
+    const failsIn = (maxSafeFails: number | undefined, seed: number): number => {
+      const r = runFight({ party: clumsy(), boss: bossWith(maxSafeFails), seed });
+      // The single window never recurs, so every stayed-in-fire is from it.
+      return r.events.filter((e) => e.type === 'mistake' && e.meta?.['kind'] === 'stayed-in-fire').length;
+    };
+    // Find a seed where enough characters fail the one window to exercise the
+    // tolerance. maxSafeFails does not touch the fail rolls, so `none` and
+    // `tol3` share the exact same failures for a given seed.
+    let seed = 0;
+    let none = 0;
+    for (; seed < 40; seed++) {
+      none = failsIn(undefined, seed);
+      if (none >= 4) break;
+    }
+    expect(none).toBeGreaterThanOrEqual(4);
+    expect(failsIn(3, seed)).toBe(none - 3);
   });
 });
 

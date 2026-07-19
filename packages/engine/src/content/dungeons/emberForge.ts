@@ -48,11 +48,9 @@ export function makeSlagmaw(overrides?: Partial<BossDefinition>): BossDefinition
     meleeSwingMs: 2000,
     meleeDamageType: 'physical',
 
-    enrageAtMs: 360_000,
-    enrageDamageMult: 6,
-
-    timeline: [
+    mechanics: [
       {
+        kind: 'timeline',
         id: 'molten-eruption',
         name: 'Molten Eruption',
         firstAtMs: 30_000,
@@ -60,25 +58,26 @@ export function makeSlagmaw(overrides?: Partial<BossDefinition>): BossDefinition
         damage: 700,
         damageType: 'fire',
       },
+      {
+        kind: 'movement',
+        firstAtMs: 18_000,
+        everyMs: 32_000,
+        durationMs: 4000,
+        failDamage: 420,
+        failDamageType: 'fire',
+      },
+      { kind: 'enrage', atMs: 360_000, damageMult: 6 },
+      // No add phase — Slagmaw is the sustain/resist check.
+      {
+        kind: 'adds',
+        atHpPct: 0,
+        waveEveryMs: 10_000_000,
+        addsPerWave: 0,
+        add: { name: 'Slag', hp: 1, meleeDamage: 0, meleeSwingMs: 10_000_000 },
+        tantrumAfterMs: 10_000_000,
+        tantrumDamageMult: 1,
+      },
     ],
-
-    movementWindows: {
-      firstAtMs: 18_000,
-      everyMs: 32_000,
-      durationMs: 4000,
-      failDamage: 420,
-      failDamageType: 'fire',
-    },
-
-    // No add phase — Slagmaw is the sustain/resist check.
-    addPhase: {
-      atHpPct: 0,
-      waveEveryMs: 10_000_000,
-      addsPerWave: 0,
-      add: { name: 'Slag', hp: 1, meleeDamage: 0, meleeSwingMs: 10_000_000 },
-      tantrumAfterMs: 10_000_000,
-      tantrumDamageMult: 1,
-    },
 
     timerJitterPct: 0.1,
     ...overrides,
@@ -94,11 +93,9 @@ export function makeVulkan(overrides?: Partial<BossDefinition>): BossDefinition 
     meleeSwingMs: 2100,
     meleeDamageType: 'physical',
 
-    enrageAtMs: 390_000,
-    enrageDamageMult: 6,
-
-    timeline: [
+    mechanics: [
       {
+        kind: 'timeline',
         id: 'forge-blast',
         name: 'Forge Blast',
         firstAtMs: 30_000,
@@ -106,29 +103,32 @@ export function makeVulkan(overrides?: Partial<BossDefinition>): BossDefinition 
         damage: 700,
         damageType: 'fire',
       },
+      // No movement windows — Vulkan is the phase-timing check. A no-op window
+      // (never fires) keeps the install-time jitter draw aligned with the
+      // other bosses.
+      {
+        kind: 'movement',
+        firstAtMs: 10_000_000,
+        everyMs: 10_000_000,
+        durationMs: 0,
+        failDamage: 0,
+        failDamageType: 'fire',
+      },
+      { kind: 'enrage', atMs: 390_000, damageMult: 6 },
+      // Wave cadence == blast cadence: the gap between "phase entered" and
+      // "next blast" repeats every cycle. Enter just after a blast and every
+      // wave spawns into a calm window; push in blindly at the wrong moment
+      // and EVERY wave overlaps a blast — hold DPS is the knowledge answer.
+      {
+        kind: 'adds',
+        atHpPct: 25,
+        waveEveryMs: 45_000,
+        addsPerWave: 3,
+        add: { name: 'Molten Sentry', hp: 1100, meleeDamage: 85, meleeSwingMs: 1800 },
+        tantrumAfterMs: 25_000,
+        tantrumDamageMult: 1.7,
+      },
     ],
-
-    // No movement windows — Vulkan is the phase-timing check.
-    movementWindows: {
-      firstAtMs: 10_000_000,
-      everyMs: 10_000_000,
-      durationMs: 0,
-      failDamage: 0,
-      failDamageType: 'fire',
-    },
-
-    // Wave cadence == blast cadence: the gap between "phase entered" and
-    // "next blast" repeats every cycle. Enter just after a blast and every
-    // wave spawns into a calm window; push in blindly at the wrong moment
-    // and EVERY wave overlaps a blast — hold DPS is the knowledge answer.
-    addPhase: {
-      atHpPct: 25,
-      waveEveryMs: 45_000,
-      addsPerWave: 3,
-      add: { name: 'Molten Sentry', hp: 1100, meleeDamage: 85, meleeSwingMs: 1800 },
-      tantrumAfterMs: 25_000,
-      tantrumDamageMult: 1.7,
-    },
 
     timerJitterPct: 0.1,
     ...overrides,

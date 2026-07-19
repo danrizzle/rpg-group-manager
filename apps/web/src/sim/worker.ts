@@ -48,6 +48,8 @@ export interface RosterBuildInput {
   stance: StanceConfig;
   gear: Record<GearSlot, string>;
   consumables: string[];
+  /** Recruit talent selection (slice 6). */
+  talents: string[];
 }
 
 /**
@@ -134,12 +136,14 @@ function buildParty(req: SimRequest): PartyMember[] {
         { discipline: 50 + fam('warrior') },
         resolveItems(enc.roster.warrior.gear),
         10,
+        enc.roster.warrior.talents,
         resolveConsumables(enc.roster.warrior.consumables),
       ),
       makePriest(
         { discipline: 50 + fam('priest') },
         resolveItems(enc.roster.priest.gear),
         10,
+        enc.roster.priest.talents,
         resolveConsumables(enc.roster.priest.consumables),
       ),
       makeMage(

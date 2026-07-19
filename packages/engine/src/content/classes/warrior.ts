@@ -4,7 +4,9 @@ import type { BehaviorStats, CombatStats } from '../../model/stats';
 import { applyGear, foldBonuses, type Item } from '../../model/item';
 import { normalizeConsumables, type ConsumableDefinition } from '../../model/consumable';
 import { LEVEL_CAP } from '../../model/progression';
+import { applyTalents, talentPointsForLevel, validateTalentSelection } from '../../model/talent';
 import { GEAR_SETS } from '../items';
+import { WARRIOR_TALENTS } from './warriorTalents';
 
 /**
  * v1 Warrior (GDD §2): the tank. Damage reduction, boss aggro via
@@ -92,6 +94,7 @@ export function makeWarrior(
   behaviorOverride?: Partial<BehaviorStats>,
   gear: Item[] = GEAR_SETS['warrior-default']!,
   level: number = LEVEL_CAP,
+  talents: string[] = [],
   consumables: ConsumableDefinition[] = [],
 ): CharacterDef {
   const geared = applyGear(
@@ -99,8 +102,10 @@ export function makeWarrior(
     { ...BASE_BEHAVIOR, ...behaviorOverride },
     gear,
   );
+  validateTalentSelection(WARRIOR_TALENTS, talents, talentPointsForLevel(level));
+  const talented = applyTalents(geared.stats, geared.behavior, KIT, WARRIOR_TALENTS, talents);
   const { passives, actives, summary } = normalizeConsumables(consumables);
-  const folded = foldBonuses(geared.stats, geared.behavior, passives.map((p) => p.bonuses));
+  const folded = foldBonuses(talented.stats, talented.behavior, passives.map((p) => p.bonuses));
   return {
     id: 'warrior',
     name: 'Borin',
@@ -108,7 +113,7 @@ export function makeWarrior(
     role: 'tank',
     stats: folded.stats,
     behavior: folded.behavior,
-    abilities: [...KIT, ...actives],
+    abilities: [...talented.abilities, ...actives],
     consumables: summary,
   };
 }

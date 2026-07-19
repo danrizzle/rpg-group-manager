@@ -265,7 +265,7 @@ function ElaraPanel() {
         </>
       )}
 
-      <TalentPanel level={level} />
+      <TalentPanel charId="mage" level={level} />
 
       <h3>Earned stats</h3>
       <p className="muted">
