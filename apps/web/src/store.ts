@@ -18,6 +18,7 @@ import {
   LEVEL_CAP,
   makeCinderMaw,
   makeEmberForge,
+  makeCinderforge,
   makeMage,
   makePriest,
   makeWarrior,
@@ -45,6 +46,7 @@ import {
   type TalentTree,
   type TimedCall,
 } from '@rpg/engine';
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type {
@@ -368,8 +370,11 @@ function defaultCharacters(): Record<CharId, CharacterBuild> {
 }
 
 
-/** Dungeon bosses simulatable on the dummy once the journal knows them. */
-export const DUNGEON_SIM_IDS = ['slagmaw', 'vulkan'];
+/** Raid bosses — simulated against the RAID selection, not the trinity. */
+export const RAID_SIM_IDS = ['ashkar', 'vael'];
+
+/** Dungeon/raid bosses simulatable on the dummy once the journal knows them. */
+export const DUNGEON_SIM_IDS = ['slagmaw', 'vulkan', ...RAID_SIM_IDS];
 
 /**
  * The exact SimRequest the current build would produce — used both to fire
@@ -379,7 +384,7 @@ export const DUNGEON_SIM_IDS = ['slagmaw', 'vulkan'];
  * worker simulates the trinity against only what's been discovered.
  */
 export function buildSimRequest(
-  s: Pick<Store, 'characters' | 'simTarget' | 'journal' | 'familiarity' | 'plans'>,
+  s: Pick<Store, 'characters' | 'simTarget' | 'journal' | 'familiarity' | 'plans' | 'raidRoster'>,
   iterations: number,
 ): SimRequest {
   const isDungeon = DUNGEON_SIM_IDS.includes(s.simTarget);
@@ -389,12 +394,22 @@ export function buildSimRequest(
   const input = (charId: CharId): RosterBuildInput => {
     const c = s.characters[charId]!;
     return {
+      id: charId,
+      name: c.name,
+      classId: c.classId,
+      level: levelForXp(c.xp),
+      behavior: c.behavior,
       stance: c.stance,
       gear: c.gear,
       consumables: [...c.consumables],
       talents: [...c.talents],
     };
   };
+  // The dummy simulates whoever would actually fight it: the raid's saved
+  // selection for a raid boss, the trinity for a dungeon boss.
+  const party = (RAID_SIM_IDS.includes(s.simTarget) ? s.raidRoster : TRINITY).filter(
+    (id) => s.characters[id],
+  );
   return {
     stance: mage.stance,
     behavior: { ...DEFAULT_BEHAVIOR, ...mage.behavior },
@@ -412,10 +427,8 @@ export function buildSimRequest(
               lowestBossHpPct: k?.lowestBossHpPct ?? 100,
               attempts: k?.attempts ?? 0,
             },
-            // Still the trinity shape — slice 11 generalizes the worker to an
-            // arbitrary party when the raid needs it.
-            roster: { warrior: input('warrior'), priest: input('priest') },
-            familiarity: { warrior: fam('warrior'), priest: fam('priest'), mage: fam('mage') },
+            party: party.map(input),
+            familiarity: Object.fromEntries(party.map((id) => [id, fam(id)])),
             ...(s.plans[s.simTarget]?.entries.length ? { plan: s.plans[s.simTarget] } : {}),
           },
         }
@@ -524,8 +537,15 @@ interface Store {
   pull: (bossId?: string) => void;
 
   // --- dungeon (phase 4) ---
-  /** Ember Forge progress: encounter id → cleared (linear unlock chain). */
+  /** Dungeon/raid progress: encounter id → cleared (linear unlock chain). */
   dungeonCleared: Record<string, boolean>;
+  /**
+   * Who raids. The roster is deliberately bigger than the raid (GDD §2 via the
+   * slice-9 ramp), so the ten who go are an explicit, persisted choice — that
+   * is what makes benching real, and per-boss familiarity gives it weight.
+   */
+  raidRoster: CharId[];
+  toggleRaidMember: (charId: CharId) => void;
   pullEncounter: (encounterId: string) => void;
   recordEncounterCleared: (encounterId: string) => void;
   /** Issue live calls (slice 6): append at the frontier + re-run deterministically. */
@@ -673,6 +693,15 @@ export const MAKERS: Record<ClassId, typeof makeMage> = {
  */
 const TRINITY: CharId[] = ['warrior', 'priest', 'mage'];
 
+/** Above this party size an encounter is a raid (needs access + a selection). */
+const MAX_TRINITY = 5;
+
+/** Every dungeon the web can pull, in progression order. */
+export const DUNGEONS = [makeEmberForge, makeCinderforge];
+
+/** The raid's fixed size — content decides sizes, never a knob (GDD §2). */
+export const RAID_SIZE = makeCinderforge().partySize.min;
+
 /**
  * Build a party from roster ids: resolve shared-bank slots in party order,
  * make each kit, stamp a unique engine id, then apply comp rules.
@@ -804,6 +833,20 @@ export function useRoster(): { id: CharId; name: string; classId: ClassId; class
         role: CLASSES[c.classId].role,
       };
     });
+}
+
+/**
+ * The party that would pull an encounter, built for UI preview (plan palette,
+ * comp checks). Consumables resolve at nominal charges — no stock is consulted
+ * and nothing is spent; only real pulls touch the bank.
+ */
+export function usePreviewParty(isRaid: boolean): PartyMember[] {
+  const characters = useStore((s) => s.characters);
+  const raidRoster = useStore((s) => s.raidRoster);
+  return useMemo(() => {
+    const ids = (isRaid ? raidRoster : TRINITY).filter((id) => characters[id]);
+    return assembleParty(characters, ids, {}, () => 0).party;
+  }, [characters, raidRoster, isRaid]);
 }
 
 /** Stable empty fallbacks — a fresh literal per render would thrash subscriptions. */
@@ -1068,8 +1111,23 @@ export const useStore = create<Store>()(
           });
         },
 
-        // ---- dungeon (phase 4) ----
+        // ---- dungeon (phase 4) / raid (phase 5) ----
         dungeonCleared: {},
+        raidRoster: [],
+        toggleRaidMember: (charId) =>
+          set((s) => {
+            if (!s.characters[charId]) return {};
+            if (s.raidRoster.includes(charId)) {
+              return { raidRoster: s.raidRoster.filter((id) => id !== charId) };
+            }
+            // The cap is the raid's size; the UI disables adds past it too.
+            if (s.raidRoster.length >= RAID_SIZE) return {};
+            // Keep selection in roster order so the party is assembled the same
+            // way every pull -- the shared-bank claim order and the group-CD
+            // carrier both read it.
+            const next = [...s.raidRoster, charId];
+            return { raidRoster: s.rosterOrder.filter((id) => next.includes(id)) };
+          }),
         journal: {},
         familiarity: {},
         plans: {},
@@ -1082,14 +1140,26 @@ export const useStore = create<Store>()(
               : { dungeonCleared: { ...s.dungeonCleared, [encounterId]: true } },
           ),
         pullEncounter: (encounterId) => {
-          const { characters, inventory, attempts, unlocks, dungeonCleared, familiarity } = get();
+          const {
+            characters, inventory, attempts, unlocks, dungeonCleared, familiarity, raidRoster,
+          } = get();
           if (!unlocks.cinderMawKilled) return;
-          const dungeon = makeEmberForge();
+          // Find the encounter in whichever dungeon owns it.
+          const dungeon = DUNGEONS.map((d) => d()).find((d) =>
+            d.encounters.some((e) => e.id === encounterId),
+          );
+          if (!dungeon) return;
           const enc = encounterById(dungeon, encounterId);
           if (!enc) return;
-          // Linear gate: trash before Slagmaw before Vulkan.
+          const isRaid = dungeon.partySize.min > MAX_TRINITY;
+          if (isRaid && !unlocks.raidAccess) return;
+          // Linear gate: each encounter needs the previous one cleared.
           const idx = dungeon.encounters.findIndex((e) => e.id === encounterId);
           if (idx > 0 && !dungeonCleared[dungeon.encounters[idx - 1]!.id]) return;
+
+          // The raid fields the saved selection; dungeons stay on the trinity.
+          const roster = isRaid ? raidRoster.filter((id) => characters[id]) : TRINITY;
+          if (isRaid && roster.length !== dungeon.partySize.min) return;
 
           // Boss familiarity (GDD §2): attempts at THIS boss sharpen each
           // character — bonus discipline on top of their earned stat.
@@ -1099,7 +1169,7 @@ export const useStore = create<Store>()(
               : 0;
           const { defs, party, consumables: partyCons } = assembleParty(
             characters,
-            TRINITY,
+            roster,
             inventory,
             fam,
           );
@@ -1191,12 +1261,14 @@ export const useStore = create<Store>()(
           // Consumption from the FINAL stream (win or lose): passives 1 per char
           // per distinct id; potion charges per char from `heal` events; capped
           // by the shared stock.
+          // Derived from the party that actually fought — `partyConsumables`
+          // is in the same order `assembleParty` resolved it, whether that was
+          // the trinity or a 10-man selection.
           const slots = fight.partyConsumables ?? [];
-          const members = [
-            { id: 'warrior', cons: slots[0] ?? [] },
-            { id: 'priest', cons: slots[1] ?? [] },
-            { id: 'mage', cons: slots[2] ?? [] },
-          ];
+          const members = (fight.party ?? []).map((c, i) => ({
+            id: c.id ?? PLAYER_ID,
+            cons: slots[i] ?? [],
+          }));
           const spent: Inventory = {};
           for (const m of members) {
             const seen = new Set<string>();
@@ -1228,7 +1300,9 @@ export const useStore = create<Store>()(
           let nextFamiliarity = familiarity;
           if (fight.boss) {
             const k = discover(fight.boss, result.events, journal[key]);
-            const names: Record<string, string> = { warrior: 'Borin', priest: 'Seren', mage: 'Elara' };
+            const names: Record<string, string> = Object.fromEntries(
+              (fight.party ?? []).map((c) => [c.id ?? PLAYER_ID, c.name]),
+            );
             let deadName: string | undefined;
             for (const e of result.events) {
               if (e.type === 'death' && names[e.source]) deadName = names[e.source];
@@ -1249,7 +1323,10 @@ export const useStore = create<Store>()(
             };
             nextJournal = { ...journal, [key]: entry };
             nextFamiliarity = { ...familiarity };
-            for (const charId of ['warrior', 'priest', 'mage']) {
+            // Everyone who was in the fight gets the attempt — at raid size
+            // this is the ten who went, which is exactly what makes benching
+            // cost something (§2: a benched character stays unfamiliar).
+            for (const charId of (fight.party ?? []).map((c) => c.id ?? PLAYER_ID)) {
               nextFamiliarity[charId] = {
                 ...(nextFamiliarity[charId] ?? {}),
                 [key]: (nextFamiliarity[charId]?.[key] ?? 0) + 1,
@@ -1561,13 +1638,14 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 12,
+      version: 13,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         characters: s.characters,
         rosterOrder: s.rosterOrder,
         loadouts: s.loadouts,
         dungeonCleared: s.dungeonCleared,
+        raidRoster: s.raidRoster,
         journal: s.journal,
         familiarity: s.familiarity,
         plans: s.plans,
@@ -1681,6 +1759,10 @@ export const useStore = create<Store>()(
         for (const id of Object.keys(s.characters)) {
           if (!s.rosterOrder.includes(id)) s.rosterOrder.push(id);
         }
+        // (v13, slice 11: the raid selection joins.) Repaired against the live
+        // roster and re-sorted into roster order — MUST run after `characters`
+        // exists, or every selection would be filtered away as unknown.
+        s.raidRoster = s.rosterOrder.filter((id) => (s.raidRoster ?? []).includes(id));
         s.loadouts = (s.loadouts ?? []).map((l) => ({
           ...l,
           consumables: sanitizeConsumableSelection(l.consumables ?? []),

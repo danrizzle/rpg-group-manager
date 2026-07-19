@@ -268,3 +268,26 @@ body {
 .recruit-bar p { margin: 4px 0 6px; }
 /* The switcher grows with the roster (up to 12), so let it wrap. */
 .roster-switcher { flex-wrap: wrap; }
+
+/* Raid-scale fight frames (phase-5 slice 11): 10 bars in a single column push
+   the combat log off-screen, so group by role and go two-column. */
+.raid-frames { display: flex; flex-direction: column; gap: 6px; }
+.raid-group-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.raid-group-frames {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 8px;
+}
+/* Single column when there isn't room for two. */
+@media (max-width: 900px) {
+  .raid-group-frames { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Raid roster picker. */
+.raid-picker { margin: 6px 0; }
+.raid-picker-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.chip-inline { margin-left: 4px; }

@@ -1,6 +1,6 @@
-import { encounterById, explorationPct, makeEmberForge } from '@rpg/engine';
+import { encounterById, explorationPct } from '@rpg/engine';
 import { useMemo } from 'react';
-import { buildSimRequest, simIsStale, useStore } from '../store';
+import { DUNGEONS, buildSimRequest, simIsStale, useStore } from '../store';
 import { SIM_TARGETS } from '../sim/bosses';
 import { mmss } from '../fight/replay';
 import { Histogram } from './Histogram';
@@ -28,21 +28,24 @@ export function ReviewPanel() {
   const journal = useStore((s) => s.journal);
   const familiarity = useStore((s) => s.familiarity);
   const plans = useStore((s) => s.plans);
+  const raidRoster = useStore((s) => s.raidRoster);
   const stale = simIsStale(
     sim,
-    buildSimRequest({ characters, simTarget, journal, familiarity, plans }, 0),
+    buildSimRequest({ characters, simTarget, journal, familiarity, plans, raidRoster }, 0),
   );
   const r = sim.result;
 
-  const dungeon = useMemo(() => makeEmberForge(), []);
-  // Dungeon bosses join the dummy once attempted — the sim runs only what the
-  // journal has revealed (GDD §4).
-  const dungeonTargets = dungeon.encounters
-    .filter((e) => e.kind === 'boss' && (journal[e.id]?.attempts ?? 0) > 0)
-    .map((e) => ({ id: e.id, name: e.name }));
+  // Every dungeon AND the raid — bosses join the dummy once attempted, since
+  // the sim runs only what the journal has revealed (GDD §4).
+  const dungeons = useMemo(() => DUNGEONS.map((make) => make()), []);
+  const dungeonTargets = dungeons.flatMap((d) =>
+    d.encounters
+      .filter((e) => e.kind === 'boss' && (journal[e.id]?.attempts ?? 0) > 0)
+      .map((e) => ({ id: e.id, name: e.name })),
+  );
   const allTargets = [...SIM_TARGETS, ...dungeonTargets];
   const targetName = (id: string) => allTargets.find((t) => t.id === id)?.name ?? id;
-  const activeEnc = encounterById(dungeon, simTarget);
+  const activeEnc = dungeons.map((d) => encounterById(d, simTarget)).find(Boolean);
   const explored =
     activeEnc?.kind === 'boss' && journal[simTarget]
       ? Math.round(explorationPct(activeEnc.boss, journal[simTarget]!) * 100)

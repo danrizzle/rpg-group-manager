@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useCharBuild, useStore } from '../store';
+import { DUNGEONS, useCharBuild, useStore } from '../store';
 import { MULTIPLIER_PRESETS, REGIONS, buildHash } from '../world/tasks';
 import { DungeonPanel } from './DungeonPanel';
 import { QueueStrip } from './QueueStrip';
@@ -51,7 +51,9 @@ export function WorldMapPanel() {
         ))}
       </div>
 
-      <DungeonPanel />
+      {DUNGEONS.map((make, i) => (
+        <DungeonPanel key={i} make={make} />
+      ))}
 
       <p className="muted">Alchemy has moved to your Home Base.</p>
     </section>

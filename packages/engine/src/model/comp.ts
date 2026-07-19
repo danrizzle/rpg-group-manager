@@ -40,10 +40,24 @@ export interface RaidCompRule {
   minRoles?: Partial<Record<CharacterRole, number>>;
 }
 
-export function checkRaidComp(
-  party: CharacterDef[],
-  rule: RaidCompRule,
-): { ok: boolean; reasons: string[] } {
+/**
+ * Structured form of a comp check, for building a comp UI.
+ *
+ * `reasons` alone is enough to explain a failure in prose, but a raid builder
+ * wants to render progress per requirement ("2/2 tanks · 2/3 healers") and
+ * highlight only the row that's short — which means the numbers, not sentences
+ * about them.
+ */
+export interface RaidCompReport {
+  ok: boolean;
+  /** Human-readable failures. Unchanged: existing callers keep working. */
+  reasons: string[];
+  size: { have: number; min?: number; max?: number; ok: boolean };
+  /** One entry per role the rule constrains, in the rule's own order. */
+  roles: { role: CharacterRole; have: number; need: number; ok: boolean }[];
+}
+
+export function checkRaidComp(party: CharacterDef[], rule: RaidCompRule): RaidCompReport {
   const reasons: string[] = [];
   if (rule.size) {
     if (party.length < rule.size.min) reasons.push(`need at least ${rule.size.min} members`);
@@ -51,10 +65,26 @@ export function checkRaidComp(
   }
   const counts = new Map<string, number>();
   for (const c of party) if (c.role) counts.set(c.role, (counts.get(c.role) ?? 0) + 1);
+
+  const roles: RaidCompReport['roles'] = [];
   for (const [role, n] of Object.entries(rule.minRoles ?? {})) {
-    if ((counts.get(role) ?? 0) < (n ?? 0)) reasons.push(`need at least ${n} ${role}`);
+    const have = counts.get(role) ?? 0;
+    const need = n ?? 0;
+    if (have < need) reasons.push(`need at least ${n} ${role}`);
+    roles.push({ role: role as CharacterRole, have, need, ok: have >= need });
   }
-  return { ok: reasons.length === 0, reasons };
+
+  const have = party.length;
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    size: {
+      have,
+      ...(rule.size ? { min: rule.size.min, max: rule.size.max } : {}),
+      ok: !rule.size || (have >= rule.size.min && have <= rule.size.max),
+    },
+    roles,
+  };
 }
 
 /** The canonical Cinderforge (first raid) comp requirement. */

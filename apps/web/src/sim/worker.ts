@@ -4,6 +4,7 @@ import {
   DEFAULT_PULL_CYCLE,
   GROUP_CDS,
   ITEMS_BY_ID,
+  LEVEL_CAP,
   ZONES,
   applyComp,
   devalue,
@@ -11,6 +12,7 @@ import {
   grindRates,
   makeCinderMaw,
   makeEmberForge,
+  makeCinderforge,
   makeMage,
   makePriest,
   makeWarrior,
@@ -51,6 +53,16 @@ interface BehaviorInput {
 }
 
 export interface RosterBuildInput {
+  /** Stable roster id — becomes the actor id in the event stream. */
+  id?: string;
+  /** Display name; falls back to the class default. */
+  name?: string;
+  /** Which kit to build. Absent = mage (pre-slice-11 requests). */
+  classId?: 'mage' | 'warrior' | 'priest';
+  /** Own level; absent = the cap, which is where recruits arrive. */
+  level?: number;
+  /** Earned-stat overrides; PARTIAL, layered on the class base. */
+  behavior?: BehaviorInput;
   stance: StanceConfig;
   gear: Record<GearSlot, string>;
   consumables: string[];
@@ -59,14 +71,16 @@ export interface RosterBuildInput {
 }
 
 /**
- * Dungeon-boss dummy sim (phase 4): present ⇒ simulate the TRINITY against
- * the journal-redacted boss — only revealed mechanics run (GDD §4).
+ * Dungeon/raid dummy sim (phase 4, generalized in slice 11): present ⇒
+ * simulate the PARTY against the journal-redacted boss — only revealed
+ * mechanics run (GDD §4).
  */
 export interface EncounterSimInput {
   id: string;
   knowledge: BossKnowledge;
-  roster: { warrior: RosterBuildInput; priest: RosterBuildInput };
-  /** Familiarity bonus discipline per char id (warrior/priest/mage). */
+  /** The party in fight order — three for a dungeon, ten for the raid. */
+  party: RosterBuildInput[];
+  /** Familiarity bonus discipline per char id. */
   familiarity: Record<string, number>;
   /** The boss plan — the dummy tests plans against known mechanics (GDD §4). */
   plan?: BossPlan;
@@ -132,46 +146,51 @@ const resolveItems = (gear: Record<GearSlot, string>): Item[] =>
     .map((id) => ITEMS_BY_ID[id])
     .filter((i): i is Item => Boolean(i));
 
-/** The trinity at the requested builds — mirrors the store's pullEncounter. */
+const MAKERS = { mage: makeMage, warrior: makeWarrior, priest: makePriest } as const;
+
+/**
+ * The party at the requested builds — mirrors the store's `assembleParty`.
+ * Party-size agnostic: three for a dungeon, ten for the raid.
+ *
+ * The dummy resolves consumables at NOMINAL charges (no inventory argument):
+ * simulating is free, and only real fights spend stock (GDD §3).
+ */
 function buildParty(req: SimRequest): PartyMember[] {
   const enc = req.encounter!;
   const fam = (id: string) => enc.familiarity[id] ?? 0;
   const defs = applyComp(
-    [
-      makeWarrior(
-        { discipline: 50 + fam('warrior') },
-        resolveItems(enc.roster.warrior.gear),
-        10,
-        enc.roster.warrior.talents,
-        resolveConsumables(enc.roster.warrior.consumables),
-      ),
-      makePriest(
-        { discipline: 50 + fam('priest') },
-        resolveItems(enc.roster.priest.gear),
-        10,
-        enc.roster.priest.talents,
-        resolveConsumables(enc.roster.priest.consumables),
-      ),
-      makeMage(
-        { ...req.behavior, discipline: (req.behavior.discipline ?? 50) + fam('mage') },
-        resolveItems(req.gear),
-        req.level,
-        req.talents,
-        resolveConsumables(req.consumables),
-      ),
-    ],
+    enc.party.map((m) => {
+      const classId = m.classId ?? 'mage';
+      const id = m.id ?? classId;
+      return {
+        ...MAKERS[classId](
+          { ...m.behavior, discipline: (m.behavior?.discipline ?? 50) + fam(id) },
+          resolveItems(m.gear),
+          m.level ?? LEVEL_CAP,
+          m.talents,
+          resolveConsumables(m.consumables),
+        ),
+        id,
+        // Unique ids must be stamped before applyComp — two warriors would
+        // otherwise collide on the engine's duplicate-id guard, and the
+        // group-CD carrier is chosen by id.
+        ...(m.name ? { name: m.name } : {}),
+      };
+    }),
     GROUP_CDS,
     COMP_PASSIVES,
   );
-  const stances = [enc.roster.warrior.stance, enc.roster.priest.stance, req.stance];
-  return defs.map((character, i) => ({ character, stance: stances[i]! }));
+  return defs.map((character, i) => ({ character, stance: enc.party[i]!.stance }));
 }
 
 function runSim(req: SimRequest): SimResponse {
   const started = performance.now();
   let setup;
   if (req.encounter) {
-    const enc = encounterById(makeEmberForge(), req.encounter.id);
+    // Look the encounter up across every dungeon, not just the Ember Forge.
+    const enc = [makeEmberForge(), makeCinderforge()]
+      .map((d) => encounterById(d, req.encounter!.id))
+      .find(Boolean);
     if (!enc || enc.kind !== 'boss') throw new Error(`unknown boss encounter '${req.encounter.id}'`);
     // The dummy simulates ONLY what the journal knows (GDD §4).
     const party = buildParty(req);
