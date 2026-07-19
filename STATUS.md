@@ -682,7 +682,23 @@ every reward deterministic.
         pull time so the character panel never lies about what a character
         wears; deleting a loadout drops its assignments.
 - [ ] **Phase 6 — Guilds**: accounts/sync, server-authoritative real fights
-      (Fastify + Postgres, same engine), guild bank, world bosses
+      (Fastify + Postgres, same engine), guild bank, world bosses.
+      **← NEXT. See `HANDOFF.md` for the orientation brief.** Phase 6 is the
+      first phase that breaks the pure-client architecture phases 1–5 relied
+      on (no server, no accounts, one localStorage key), so it is a new axis
+      rather than one more slice. Two things make it tractable and both already
+      hold: the engine is pure and deterministic, so a server can re-run a
+      client's fight and get bit-identical results; and outcomes are derived
+      from the event stream, so world-boss damage contribution needs no new
+      scoring path. `model/journal.ts`'s monotone merge is already the
+      guild-wide discovery mechanism §7 asks for.
+      **Resolve before planning slices:** (a) what the server is authoritative
+      OVER — re-running every fight is honest but adds latency to a pull, while
+      trusting the client makes a leaderboard meaningless; (b) loot rules,
+      which phase 5 deliberately sidestepped with deterministic rewards and
+      guild rewards will re-open. **Consider first:** the owed raid balance
+      retune — engine-only, self-contained, and world-boss tuning will inherit
+      whatever conventions it sets.
 - [ ] **Phase 7 — Expansion stages** (as needed): traits, council/split/soak,
       difficulty tiers, affixes, timed runs, behavior-effect uniques,
       graphical replay

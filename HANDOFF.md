@@ -1,108 +1,195 @@
-# Phase 5 — local testing handoff
+# Phase 6 — Guilds: handoff for a fresh session
 
-> **EXECUTED 2026-07-19 — all steps passed.** Results are recorded in STATUS.md
-> under "Phase 5 — post-merge verification". Kept for provenance. Two fixes if
-> you re-run it: step 2's baseline must be **`c9ef804`** (post-merge, `main` *is*
-> the branch), and **step 3's `--trace` greps cannot work** — `--trace` prints
-> only the last 25–30 events, so mid-fight `targetChanged`/`buffRemoved` fall
-> outside the window; `test/raid.test.ts` asserts them instead.
+**Status: phase 5 is COMPLETE and merged to `main` (`5e602ad`).** 166 engine
+tests green, both typechecks + web build clean, working tree clean.
 
-A prompt for Claude Code to verify the phase-5 work (branch
-`claude/phase-5-raid-scale-party-tlgitk`, PR #1) on a machine with the Docker
-dev environment. Everything below was written/verified in a remote container
-**without a browser**, so the CLI/engine checks are trustworthy and the
-**web UI needs a real browser pass** (steps 5–6).
+Start by reading `STATUS.md` (the ledger — phases 1–5 and every design decision
+behind them), then `DESIGN.md` §7 (Guilds), §6 (economy/guild bank) and §8
+(the two complexity laws). This file is the orientation layer on top of those:
+what phase 6 actually costs, what is already true, and where the traps are.
 
 Everything runs in Docker via the wrappers — never install tooling on the host.
 
+```sh
+./dev pnpm install
+./dev pnpm --filter @rpg/engine test        # 18 files / 166 tests
+./dev pnpm --filter @rpg/engine typecheck
+./dev pnpm --filter @rpg/web typecheck && ./dev pnpm --filter @rpg/web build
+./web                                       # → http://localhost:5174
+```
+
 ---
 
-## 0. Setup
-```sh
-git fetch origin && git checkout claude/phase-5-raid-scale-party-tlgitk
-./dev pnpm install
-```
+## 1. Read this before planning anything
 
-## 1. Engine tests + typecheck (should be all green)
-```sh
-./dev pnpm --filter @rpg/engine test        # expect 18 files / 161 tests passing
-./dev pnpm --filter @rpg/engine typecheck    # clean
-```
-New test files to eyeball: `test/type4.test.ts`, `test/rescue.test.ts`,
-`test/classtalents.test.ts`, `test/raid.test.ts`, plus the raid-scale block in
-`test/party.test.ts` and `test/mechanics.test.ts`.
+**Phase 6 is the first phase that breaks the architecture every earlier phase
+relied on.** Phases 1–5 shipped a pure client: no server, no accounts, no
+network, all state in one `localStorage` key. Guilds need accounts, sync and a
+shared authority. That is not "one more slice" — it is a new axis, and §8's
+Law 1 explicitly warns that a game gets complicated when systems arrive
+*simultaneously*.
 
-## 2. Byte-identity — THE core guarantee
-Every existing solo + trinity stream must be bit-for-bit unchanged vs `main`.
-Capture on `main`, then on the branch, and diff:
-```sh
-git checkout main
-mkdir -p /tmp/base
-for a in "--boss cinder-maw" "--boss emberwing --level 9" "--boss bandit-warlord --level 3" \
-         "--encounter forge-whelps" "--encounter slagmaw" "--encounter vulkan"; do
-  ./dev pnpm -s --filter @rpg/engine cli -- $a --json > "/tmp/base/$(echo $a | tr ' /' '__').json"
-done
-git checkout claude/phase-5-raid-scale-party-tlgitk
-for a in "--boss cinder-maw" "--boss emberwing --level 9" "--boss bandit-warlord --level 3" \
-         "--encounter forge-whelps" "--encounter slagmaw" "--encounter vulkan"; do
-  ./dev pnpm -s --filter @rpg/engine cli -- $a --json > "/tmp/after_$(echo $a | tr ' /' '__').json"
-done
-for f in /tmp/base/*.json; do diff -q "$f" "/tmp/after_$(basename $f)" ; done
-# expect: no output (all identical). Ember Forge should read Slagmaw 97.5% /
-# Vulkan 96.25% at --n 400.
-```
+Two things make it tractable, and both are already true:
 
-## 3. The raid + type-4 mechanics (new content)
-```sh
-./dev pnpm --filter @rpg/engine cli -- --raid --boss ashkar --n 400   # ~100% kill, TTK ~3:30
-./dev pnpm --filter @rpg/engine cli -- --raid --boss vael   --n 400   # ~100% kill
-./dev pnpm --filter @rpg/engine cli -- --raid --boss ashkar --pgear starter --n 400  # ~96%
-./dev pnpm --filter @rpg/engine cli -- --raid --boss ashkar --trace   # look for targetChanged (tank swaps)
-./dev pnpm --filter @rpg/engine cli -- --raid --boss vael   --trace   # look for buffRemoved (dispels)
-```
-`raid.test.ts` already asserts tank swaps fire on Ashkar and dispels on Vael.
-Note: raid balance is **placeholder** — a tighter Normal≈90% / a Heroic variant
-is an open retune.
+- **The engine is pure and deterministic.** `packages/engine` has zero runtime
+  dependencies and runs unchanged in Node and the browser (see `CLAUDE.md` —
+  this is an architecture rule, not an accident). A fight is a pure function of
+  `(setup, seed)`. A server can therefore *re-run* a client's fight and get
+  bit-identical results, which is what makes "server-authoritative real fights"
+  cheap rather than a rewrite.
+- **The event stream is the only source of truth for outcomes.** Damage
+  contributed to a world boss is derivable from `CombatEvent[]` by the same
+  code the client already uses (`analysis/metrics.ts`). No new scoring path.
 
-## 4. Web typecheck + build
-```sh
-./dev pnpm --filter @rpg/web typecheck && ./dev pnpm --filter @rpg/web build   # both clean
-```
+**The single biggest open question is what the server is authoritative OVER.**
+Re-running every fight server-side is the honest answer but changes the feel of
+the game (latency on a pull). Trusting the client and only sharing outcomes is
+cheap but makes a world-boss leaderboard meaningless. Decide this **before**
+writing any server code — it determines the entire shape of phase 6.
 
-## 5. In-browser QA (needs a real browser — the risky, unverified part)
-```sh
-./web    # http://localhost:5174
-```
-**Persist migration (v9 → v10) — do this with the real save stashed first.**
-If there's a live `rpg-world-v1` in localStorage, copy it to a file before
-touching anything, then verify it loads cleanly (recruits gain `talents: []`,
-no data loss). Do destructive testing in an isolated context.
+---
 
-Walk through:
-1. **Recruit talents (slice 6):** open the character switcher → Borin (warrior)
-   and Seren (priest) now have a **Talents** section (was Elara-only). Spend
-   points; the stat line should move. Respec should charge 10 sunleaf **once**.
-   Warrior capstone grants *Challenging Shout* (taunt), priest capstones
-   *Purify* (dispel) / *Power Word: Barrier* — confirm they appear in the
-   Abilities list when specced.
-2. **Roster-derived call palette (slice 6):** in a dungeon pull's live mode, the
-   "All CDs now!" / "Heal CD now!" buttons should reflect the actual party
-   (Battle Shout, Divine Hymn, talented Pyroclasm, …) and disable when the party
-   has none.
-3. **Ember Forge unchanged:** pull the trinity dungeon — should behave exactly as
-   before (this is the byte-identity guarantee, visually).
-4. Confirm no console errors; the app builds and runs.
+## 2. What exists today (the ground truth)
 
-## 6. Known gaps to confirm are absent / expected
-- **No web raid pull** yet — Cinderforge is engine/CLI-only. The dungeon path is
-  still trinity-shaped; wiring a 10-man raid pull + raid view is the main
-  remaining slice-7 web work.
-- **No access-building gate** and **no catalyst crafting recipes** yet
-  (documented follow-ups; gear tiers already exist).
-- Loadout UI stays Elara-facing (the `classId` model is scoped for later).
+- **Workspace:** `packages/engine` (pure sim) + `apps/web` (React + Zustand).
+  `pnpm-workspace.yaml` already globs `apps/*` and `packages/*`, so an
+  `apps/server` slots in with no tooling changes.
+- **Engine deps:** none at runtime. Keep it that way — it is why the same code
+  can be the server's referee.
+- **Web deps:** react, react-dom, zustand, `@rpg/engine`. No router, no data
+  layer, no auth. All of that is phase-6 greenfield.
+- **All state is one `localStorage` key** (`rpg-world-v1`), currently at
+  **persist v15**, written by Zustand `persist` with an explicit `partialize`
+  allowlist in `apps/web/src/store.ts` (~line 1712). The persisted shape is:
+  `characters`, `rosterOrder`, `loadouts`, `dungeonCleared`, `raidRoster`,
+  `bossLoadouts`, `journal`, `familiarity`, `plans`, `unlocks`, `materials`,
+  `inventory`, `buildings`, `attempts`, `chars`, `lastSeenWall`, `multiplier`.
+  **That allowlist is your account schema.** It is already a clean, serializable
+  snapshot of a player — syncing it is a smaller job than it sounds.
+- **Docker:** `compose.yaml` runs a single `dev` service, host `5174` →
+  container `5173`. A server needs a second service and a second port mapping.
+- **No CI, no lint step, no test runner for the web app.** The gates are the
+  four commands above, run by hand. The engine has 166 tests; `apps/web` has
+  **zero** — every web slice so far was verified in a real browser instead
+  (see §5).
 
-## Summary of risk
-- **Engine (slices 2–5, 7 content): high confidence** — tested + byte-identity
-  verified.
-- **Web (slices 3, 5, 6): typecheck + build clean, but not browser-verified** —
-  steps 5–6 are where to look for regressions.
+---
+
+## 3. What phase 6 is, per the GDD
+
+§7 lists three features. They are not equal in size:
+
+| Feature | Real cost | Notes |
+|---|---|---|
+| **Accounts + sync** | **The whole phase, really.** | Server, DB, auth, conflict resolution, offline-first. Everything else depends on it. |
+| **Guild bank** | Small once sync exists | §6. The bank is already a shared pool locally (`materials`/`inventory` + `bankCapacity`); making it guild-shared is mostly authority, not mechanics. |
+| **Guild world bosses** | Medium | The interesting one. Each member sends their own roster at a shared HP pool; contributed damage is summed; the journal is guild-wide. |
+
+**World bosses are the design payoff and they fit the existing engine almost
+perfectly**: each member's attempt is a normal fight against a boss with a huge
+HP pool, and their contribution is damage dealt, off the event stream. The
+"shared journal" is `model/journal.ts`'s monotone merge — which is *already* a
+merge over discovered-mechanic sets, so guild-wide discovery is `discover()`
+folded across members rather than anything new. Read that file before designing
+this; the hard part is already done.
+
+**Rewards must not be exclusive gear** (§7 is explicit — the guild is not a
+power requirement). Cosmetics, titles, a temporary guild-wide buff, and rare
+crafting materials that feed the *existing* economy.
+
+---
+
+## 4. Traps and open questions, in the order they will bite
+
+1. **Decide the authority model first** (see §1). Everything downstream depends
+   on it.
+2. **Loot rules are still unresolved and now matter more.** STATUS's "open
+   design questions" flag this as the largest genuine GDD gap. Phase 5
+   sidestepped it by making every reward deterministic (guaranteed first-clear
+   trophies + guaranteed per-kill catalysts). Guild rewards re-open it — resolve
+   it deliberately rather than inventing a second ad-hoc scheme.
+3. **Raid balance is untuned.** Ashkar and Vael sit near ~100% at default gear.
+   The retune to Normal ≈ 90% plus a Heroic variant is still owed and needs
+   *survivability variance* — the TTK distribution is currently too tight for a
+   clean enrage wall. Consider doing this BEFORE guilds: world-boss tuning will
+   inherit whatever conventions the raid establishes.
+4. **The persist migration chain is long (v15).** Do not break it. Every version
+   bump so far was verified against a copy of a real save. If accounts arrive,
+   the local save becomes a *cache* rather than the truth — plan that transition
+   explicitly instead of letting both drift.
+5. **`apps/web` has no tests.** Phase 6 adds a server, where hand-verification
+   in a browser stops being sufficient. Set up server tests in its first slice;
+   retrofitting is exactly what the engine avoided by testing from phase 1.
+6. **Don't leak the economy into the engine.** `packages/engine` knows nothing
+   about herbs, recipes, banks or accounts, and that separation is load-bearing
+   (`world/professions.ts` header says so). Guild bank logic belongs web/server
+   side.
+7. **Crafted gear is deliberately unbuilt** and is a live decision, not an
+   oversight. §6 frames catalysts around tier-2 weapons, but items carry `tier`
+   as pure balance labelling with no cost or source, there is no recipe→item
+   path anywhere, and all gear is **free-pick** in the dropdowns — so crafted
+   gear means introducing gear **ownership**, which retroactively gates every
+   item currently selectable. Its own scoped slice, with the user's sign-off.
+
+---
+
+## 5. How to work in this repo (conventions that are actually enforced)
+
+- **One commit per slice**, with the reasoning in the body — not just the what.
+  `git log` is the design record; read a few phase-5 commits for the register.
+- **Update `STATUS.md` whenever a slice lands.** It is the ledger and the
+  handoff surface between sessions.
+- **Byte-identity is a hard law.** Any engine change must leave existing streams
+  bit-for-bit unchanged. The baseline commit is **`c9ef804`** (the last commit
+  before phase-5 engine work). The check:
+
+  ```sh
+  # capture on c9ef804 and on your branch, then diff the two directories
+  for a in "--boss cinder-maw" "--boss emberwing --level 9" \
+           "--boss bandit-warlord --level 3" "--encounter forge-whelps" \
+           "--encounter slagmaw" "--encounter vulkan" \
+           "--zone heartfield" "--zone cinder-wastes"; do
+    ./dev pnpm -s --filter @rpg/engine cli -- $a --json > "OUT/$(echo $a | tr ' -' '__').json"
+  done
+  ```
+
+  For changes touching shared code, diff **full event streams** across several
+  seeds, not just the `--json` aggregates — an aggregate can match while a
+  single melee target flipped. Slice 8's carrier change was verified across 23
+  artifacts this way.
+- **Engine before web inside every slice.**
+- **In-browser verification is expected** for web slices. Two hard-won gotchas:
+  1. **Stash the real save to a file before any migration test.** Migrations run
+     on page load, so *opening the app is the test*.
+  2. **Seeding a test save requires freezing `localStorage.setItem`** right after
+     writing and before reload — the world tick persists so eagerly it clobbers
+     any external write. Close other app tabs first; a second open tab
+     overwrites the seed.
+- **`--trace` prints only the last ~25–30 events.** Mid-fight events
+  (`targetChanged`, `buffRemoved`, `interrupted`) fall outside that window, so
+  grepping the trace for them returns nothing and proves nothing.
+  `packages/engine/test/raid.test.ts` is the real verification.
+- **Playback speed resets to 1× on every pull** — mildly annoying when
+  re-running a 3-minute raid boss. Cosmetic, unfixed, noted so you don't think
+  a click failed.
+
+---
+
+## 6. Suggested first moves
+
+1. Read `STATUS.md` end to end, especially "Phase 5 — autonomous design
+   decisions" and "open design questions". Most phase-6 traps are foreshadowed
+   there.
+2. Resolve the **authority model** and **loot rules** with the user before
+   planning slices. Both are product decisions, not implementation details.
+3. Consider landing the **raid balance retune** first as a small, self-contained
+   phase-5 coda — it is owed, it is engine-only, and it sets conventions
+   world-boss tuning will inherit.
+4. Then author a phase-6 slice plan **before writing code**, the way phases 4
+   and 5 were planned (both slice plans are recorded in `STATUS.md`, authored
+   ahead of implementation — that discipline is why the byte-identity law
+   survived two phases of heavy refactoring).
+
+*Phase 5's own handoff and its executed results live in `STATUS.md` under
+"Phase 5 — post-merge verification"; the original file is in git history at
+`1d7a641`.*
