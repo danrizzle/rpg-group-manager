@@ -24,6 +24,9 @@ import { makePriest } from '../src/content/classes/priest';
 import { applyComp } from '../src/model/comp';
 import { COMP_PASSIVES, GROUP_CDS } from '../src/content/groupCds';
 import { makeEmberForge, makeSlagmaw, makeVulkan } from '../src/content/dungeons/emberForge';
+import { makeAshkar, makeVael } from '../src/content/dungeons/cinderforge';
+import { WARRIOR_TALENT_BUILDS } from '../src/content/classes/warriorTalents';
+import { PRIEST_TALENT_BUILDS } from '../src/content/classes/priestTalents';
 import { encounterById } from '../src/model/dungeon';
 import { TALENT_BUILDS } from '../src/content/classes/mageTalents';
 import { ZONES } from '../src/content/mobs/zones';
@@ -259,6 +262,8 @@ const BOSSES: Record<string, (o?: Partial<BossDefinition>) => BossDefinition> = 
   emberwing: makeEmberwing,
   slagmaw: makeSlagmaw,
   vulkan: makeVulkan,
+  ashkar: makeAshkar,
+  vael: makeVael,
 };
 
 // ---- Raid tuning mode (--raid: canonical 2 tanks / 3 healers / 5 dps) -------
@@ -284,12 +289,17 @@ if (flag('raid')) {
           if (!c) throw new Error(`unknown consumable '${s.trim()}'`);
           return c;
         });
+  // Raiders come specced: tanks take the threat build (Challenging Shout →
+  // tank swaps), healers the throughput build (Purify → dispels). --pnotal
+  // strips talents to measure the bare comp.
+  const wTal = flag('pnotal') ? [] : WARRIOR_TALENT_BUILDS['threat']!;
+  const pTal = flag('pnotal') ? [] : PRIEST_TALENT_BUILDS['throughput']!;
   const raw = [
-    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, [], pcons),
-    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, [], pcons),
-    makePriest({ discipline: pdisc }, gearFor('priest'), 10, [], pcons),
-    makePriest({ discipline: pdisc }, gearFor('priest'), 10, [], pcons),
-    makePriest({ discipline: pdisc }, gearFor('priest'), 10, [], pcons),
+    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, wTal, pcons),
+    makeWarrior({ discipline: pdisc }, gearFor('warrior'), 10, wTal, pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pTal, pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pTal, pcons),
+    makePriest({ discipline: pdisc }, gearFor('priest'), 10, pTal, pcons),
     ...Array.from({ length: 5 }, () => makeMage({ discipline: pdisc }, gearFor('mage'), 10, talents, pcons)),
   ];
   // makeX hardcodes one id per class — give every member a unique id (tanks

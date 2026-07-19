@@ -574,22 +574,39 @@ bind from there on. As of July 2026.
         editor's curated list is not yet); progressive-disclosure gating of the
         palette is not implemented. Recruit `behavior`/`xp` still default
         (talents made real, the rest stays class-default).
-  - [ ] **Slice 7 — Tier-2 raid + catalyst progression + access building
-        (content + web).** The first raid, gated behind an **access
-        building** (§5: "use it deliberately at raids and tier transitions" —
-        the bridge is the v1 precedent, escalated to profession-made
-        materials via Blacksmithing). Bosses use type-4 mechanics from
-        slices 2–3, tuned to the Law-2 targets: Normal ≥ ~90% on auto plan +
-        adequate gear; Heroic with a stat-proof ceiling no gear level
-        rescues. Catalyst model (§6): tier-2 gear is crafted with materials
-        from tier-1 content, keeping Ember Forge permanently relevant — plus
-        resist gear from older regions. Group CD `requires` counts already
-        scale, but `minDistinctRoles` is trivially true at raid size (only 3
-        roles exist) — raid comp rules want **ratios** (≥2 tanks, ≥4
-        healers). Also note the comp rule "first member of the class carries
-        the CD" is an order-dependent identity check: **reordering the roster
-        silently moves which character holds the raid CD and invalidates
-        persisted plans referencing `charId`.**
+  - [~] **Slice 7 — Cinderforge raid + comp rules (engine content landed;
+        web raid UI + catalyst crafting deferred).** **Landed (engine):**
+        - **Cinderforge** — the first **10-man raid**
+          (`content/dungeons/cinderforge.ts`), two bosses exercising the full
+          type-4 stack, each auto-answered (Law 2, verified): **Warlord Ashkar**
+          — Molten Brand stacks a per-stack `damageTakenMult` on the current
+          tank → the off-tank auto-**taunts** to swap (5 swaps/kill measured);
+          Cinder Nova party sustain; lava vents with a fail tolerance. **Pyre-
+          Priest Vael** — Immolation Rite is a real **interruptible cast**; Hex
+          of Ash is a dispellable magic debuff the Purify healers auto-**dispel**
+          (39 cleanses/kill measured). Tuned via `--raid --boss ashkar|vael`
+          against the talented 2/3/5 comp: **100% at default gear, 96% starter**
+          (enrage backstop at 5:00; TTK ~3:30). Numbers are placeholder — a
+          tighter Normal ≈ 90% and a Heroic (stat-proof) variant are a retune
+          follow-up (the TTK distribution is too tight for a clean enrage wall
+          without survivability variance).
+        - **Comp ratio rules** (`model/comp.ts`): `checkRaidComp` +
+          `RaidCompRule` (size + `minRoles`) + `CINDERFORGE_COMP_RULE`
+          (10-man, ≥2 tanks, ≥3 healers) — the ratio check `minDistinctRoles`
+          couldn't express at raid size.
+        - **Pummel** interrupt added to the warrior tree (the interrupt content
+          that answers Immolation Rite as a knowledge lever). `--raid` gains
+          `--pnotal`; the raid comp comes specced (threat/throughput builds).
+        - CLI `--raid --boss ashkar|vael`; engine exports for the raid + comp
+          helpers. **161 engine tests green; all existing streams byte-identical.**
+        **Deferred (web, documented follow-ups):** the raid **pull UI** (10-man
+        assembly, raid view — the dungeon path is trinity-shaped today), the
+        **access building** gate (§5; add a `world/base.ts` building +
+        milestone), and the **catalyst crafting** economy (tier-2 recipes from
+        tier-1 mats; the gear tiers already exist in `content/items.ts`). Also
+        note for phase 6: the group-CD "first member of the class carries the
+        CD" is order-dependent — reordering the roster moves the raid CD and can
+        invalidate persisted plans referencing `charId`.
 - [ ] **Phase 6 — Guilds**: accounts/sync, server-authoritative real fights
       (Fastify + Postgres, same engine), guild bank, world bosses
 - [ ] **Phase 7 — Expansion stages** (as needed): traits, council/split/soak,

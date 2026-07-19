@@ -87,8 +87,8 @@ export { makeWarrior, warriorBaseForLevel } from './content/classes/warrior';
 export { WARRIOR_TALENTS, WARRIOR_TALENT_BUILDS } from './content/classes/warriorTalents';
 export { makePriest, priestBaseForLevel } from './content/classes/priest';
 export { PRIEST_TALENTS, PRIEST_TALENT_BUILDS } from './content/classes/priestTalents';
-export { applyComp, unlockedGroupCds } from './model/comp';
-export type { CompPassiveDefinition, GroupCdDefinition } from './model/comp';
+export { applyComp, unlockedGroupCds, checkRaidComp, CINDERFORGE_COMP_RULE } from './model/comp';
+export type { CompPassiveDefinition, GroupCdDefinition, RaidCompRule } from './model/comp';
 export { GROUP_CDS, COMP_PASSIVES } from './content/groupCds';
 export { sanitizePlan } from './model/plan';
 export type { BossPlan, PlanAction, PlanEntry, PlanTrigger, TimedCall } from './model/plan';
@@ -109,6 +109,7 @@ export {
   makeSlagmaw,
   makeVulkan,
 } from './content/dungeons/emberForge';
+export { makeCinderforge, makeAshkar, makeVael } from './content/dungeons/cinderforge';
 export { makeCinderMaw } from './content/bosses/cinderMaw';
 export { makeBanditWarlord } from './content/bosses/banditWarlord';
 export { makeEmberwing } from './content/bosses/emberwing';

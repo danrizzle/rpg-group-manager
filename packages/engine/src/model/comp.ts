@@ -1,5 +1,5 @@
 import type { Ability } from './ability';
-import type { CharacterDef } from '../sim/engine';
+import type { CharacterDef, CharacterRole } from '../sim/engine';
 import { foldBonuses } from './item';
 import type { ItemBonuses } from './item';
 
@@ -29,6 +29,39 @@ export interface CompPassiveDefinition {
   bonuses: ItemBonuses;
   desc: string;
 }
+
+/**
+ * Raid comp requirements (GDD §4/§7): raid content needs role RATIOS, not just
+ * "3 distinct roles" (trivially true at raid size). Cinderforge's tank-swap and
+ * dispel checks want ≥2 tanks and ≥3 healers.
+ */
+export interface RaidCompRule {
+  size?: { min: number; max: number };
+  minRoles?: Partial<Record<CharacterRole, number>>;
+}
+
+export function checkRaidComp(
+  party: CharacterDef[],
+  rule: RaidCompRule,
+): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (rule.size) {
+    if (party.length < rule.size.min) reasons.push(`need at least ${rule.size.min} members`);
+    if (party.length > rule.size.max) reasons.push(`at most ${rule.size.max} members`);
+  }
+  const counts = new Map<string, number>();
+  for (const c of party) if (c.role) counts.set(c.role, (counts.get(c.role) ?? 0) + 1);
+  for (const [role, n] of Object.entries(rule.minRoles ?? {})) {
+    if ((counts.get(role) ?? 0) < (n ?? 0)) reasons.push(`need at least ${n} ${role}`);
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+/** The canonical Cinderforge (first raid) comp requirement. */
+export const CINDERFORGE_COMP_RULE: RaidCompRule = {
+  size: { min: 10, max: 10 },
+  minRoles: { tank: 2, healer: 3 },
+};
 
 /** The group CDs a given comp unlocks (for UI and plan building blocks). */
 export function unlockedGroupCds(
