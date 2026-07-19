@@ -211,15 +211,12 @@ function runGrind(req: GrindRequest): GrindResponse {
   // v1: grinding runs on the crafted-consumable economy with EMPTY slots —
   // the free legacy potion must not leak into AFK grinding. Per-task
   // consumable budgets are a possible follow-up.
-  // Each character grinds with their own kit. Recruits have no talents and no
-  // behavior overrides of their own (see RosterBuild) — the store passes the
-  // class defaults, matching what `pullEncounter` already builds them with.
-  const player =
-    req.charId === 'warrior'
-      ? makeWarrior(req.behavior, items, req.level, [])
-      : req.charId === 'priest'
-        ? makePriest(req.behavior, items, req.level, [])
-        : makeMage(req.behavior, items, req.level, req.talents, []);
+  // Each character grinds with their own kit, talents included. `behavior` is
+  // a partial override layered on the class's own base — never a filled
+  // object, or every class would inherit the mage's damageWhileMoving.
+  const make =
+    req.charId === 'warrior' ? makeWarrior : req.charId === 'priest' ? makePriest : makeMage;
+  const player = make(req.behavior, items, req.level, req.talents, []);
   const raw = grindRates(
     { player, stance: req.stance, pack },
     DEFAULT_PULL_CYCLE,
