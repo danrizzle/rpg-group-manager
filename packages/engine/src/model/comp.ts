@@ -78,6 +78,46 @@ export function unlockedGroupCds(
 }
 
 /**
+ * Pick the one carrier per unlocked group CD: the member of the granting class
+ * with the lexicographically smallest id.
+ *
+ * Deliberately keyed on `id`, NOT on array position. The previous rule was
+ * `party.find((m) => m.classId === cd.grantsTo) === c` — a reference-identity
+ * check against the FIRST array element of that class, so reordering the party
+ * silently moved Battle Shout / Rekindle to a different character. Once the
+ * roster is reorderable (and a raid is assembled from a selection), that would
+ * invalidate persisted plans referencing `charId`. An id is stable under any
+ * ordering, so the carrier is a property of the comp, not of how it was built.
+ *
+ * Byte-identity: with exactly one member per class (every solo + trinity
+ * stream) the smallest id IS the only id, so the carrier is unchanged.
+ *
+ * `CharacterDef.id` is optional (absent = the solo PLAYER_ID), and two id-less
+ * members are genuinely indistinguishable — so members without an id fall back
+ * to array position, exactly the old behavior. Returns the carrier DEF, not the
+ * id, so that fallback stays a plain reference comparison.
+ */
+function carriers(
+  party: CharacterDef[],
+  unlocked: GroupCdDefinition[],
+): Map<string, CharacterDef> {
+  const byCd = new Map<string, CharacterDef>();
+  for (const cd of unlocked) {
+    let best: CharacterDef | undefined;
+    for (const m of party) {
+      if (m.classId !== cd.grantsTo) continue;
+      if (best === undefined) {
+        best = m;
+      } else if (m.id !== undefined && (best.id === undefined || m.id < best.id)) {
+        best = m;
+      }
+    }
+    if (best !== undefined) byCd.set(cd.id, best);
+  }
+  return byCd;
+}
+
+/**
  * Apply comp rules to a party: grant unlocked group CDs to their carriers
  * and fold passives onto everyone. Pure — returns new CharacterDefs.
  */
@@ -89,12 +129,13 @@ export function applyComp(
   const unlocked = unlockedGroupCds(party, groupCds);
   const roles = new Set(party.map((c) => c.role).filter(Boolean));
   const activePassives = passives.filter((p) => roles.size >= p.minDistinctRoles);
+  const carrier = carriers(party, unlocked);
 
   return party.map((c) => {
     const granted = unlocked
       .filter((cd) => cd.grantsTo === c.classId)
-      // First member of the class carries it — one Battle Shout per comp.
-      .filter((cd) => party.find((m) => m.classId === cd.grantsTo) === c)
+      // One carrier per class — see `carriers` for why it is id-keyed.
+      .filter((cd) => carrier.get(cd.id) === c)
       .map((cd) => cd.ability);
     let stats = c.stats;
     let behavior = c.behavior;
