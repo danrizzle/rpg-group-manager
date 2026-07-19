@@ -1,6 +1,5 @@
 import { bankCapacity } from './base';
 import {
-  WORLD_CHARS,
   type AwayEvent,
   type CharWorld,
   type Task,
@@ -119,28 +118,32 @@ export interface SharedSlice {
  * world clock (GDD §2 "division of labor", §5 task queues).
  *
  * Each character owns their position + queue; the bank (materials, inventory)
- * is shared, so characters are folded in the fixed `WORLD_CHARS` order and the
+ * is shared, so characters are folded in the caller's explicit `order` and the
  * shared pools are threaded from one to the next. That order is what keeps the
  * capacity clamp deterministic when two characters gather into a full bank in
  * the same step — without it, live ticks and offline catch-up could disagree.
+ * Slice 8 made it a parameter (the store's `rosterOrder`) so a growing roster
+ * folds in a stable, explicit sequence rather than a hardcoded trio.
  *
  * Still pure: the live tick (many tiny steps) and catch-up (one big step)
  * share this function, exactly as they shared `advanceWorld` before.
  *
- * v1 simplification: XP credits Elara only. Recruits arrive at the level cap
- * (10 = MAX), so grind XP is meaningless for them — crediting the shared pool
- * for their kills would silently inflate Elara's level instead.
+ * v1 simplification: XP credits `xpCharId` (Elara) only. Recruits arrive at the
+ * level cap (10 = MAX), so grind XP is meaningless for them — crediting the
+ * shared pool for their kills would silently inflate her level instead.
  */
 export function advanceAll(
   shared: SharedSlice,
   chars: Record<WorldCharId, CharWorld>,
   elapsedGameMs: number,
+  order: readonly WorldCharId[],
+  xpCharId: WorldCharId = 'mage',
 ): { shared: SharedSlice; chars: Record<WorldCharId, CharWorld>; events: AwayEvent[] } {
   let acc = { ...shared };
   const nextChars = { ...chars };
   const events: AwayEvent[] = [];
 
-  for (const charId of WORLD_CHARS) {
+  for (const charId of order) {
     const cw = chars[charId];
     if (!cw || cw.queue.length === 0) continue;
     const xpBefore = acc.xp;
@@ -157,7 +160,7 @@ export function advanceAll(
     );
     acc = {
       // Only Elara banks XP (see above); recruits are capped.
-      xp: charId === 'mage' ? next.xp : xpBefore,
+      xp: charId === xpCharId ? next.xp : xpBefore,
       materials: next.materials,
       inventory: next.inventory,
       buildings: acc.buildings,

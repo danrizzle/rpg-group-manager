@@ -30,7 +30,9 @@ const cause = (id: string): string => id.replace(/-/g, ' ');
 // editor exposes (§3 ground rule 1). Derived from the ACTUAL party's abilities
 // by tag, so comp/talent CDs (Battle Shout, Pyroclasm, Rekindle, …) appear
 // automatically instead of via hardcoded ids.
-type PartyLike = { character: { id?: string; abilities: { id: string; tags: readonly string[] }[] } }[];
+type PartyLike = {
+  character: { id?: string; name: string; abilities: { id: string; name: string; tags: readonly string[] }[] };
+}[];
 const callsFor = (party: PartyLike, tag: string): PlanAction[] =>
   party.flatMap((m) =>
     m.character.abilities
@@ -39,15 +41,32 @@ const callsFor = (party: PartyLike, tag: string): PlanAction[] =>
   );
 
 /** Human label for one adopted/logged call action (mirrors PlanPanel). */
-function callLabel(a: PlanAction): string {
+function callLabel(a: PlanAction, party: PartyLike): string {
   if (a.kind === 'holdDps') return a.hold ? 'Stop damage!' : 'Push!';
   if (a.kind === 'retreat') return 'Retreat!';
   if (a.kind === 'stance') {
+    const who = nameOf(a.charId, party);
     const t = a.patch.targeting;
-    return t === 1 ? 'Elara → Cleave' : t === 0 ? 'Elara → Focus' : `${a.charId}: stance`;
+    return t === 1 ? `${who} → Cleave` : t === 0 ? `${who} → Focus` : `${who}: stance`;
   }
-  const names: Record<string, string> = { warrior: 'Battle Shout', mage: a.abilityId === 'pyroclasm' ? 'Pyroclasm' : 'Combustion', priest: 'Divine Hymn' };
-  return names[a.charId] ?? a.abilityId;
+  // Name the ability from the actual kit — a 10-man has several of each class,
+  // so a per-class lookup would mislabel most of them.
+  const member = party.find((m) => (m.character.id ?? 'player') === a.charId);
+  const ability = member?.character.abilities.find((ab) => ab.id === a.abilityId);
+  return ability ? `${member!.character.name}: ${ability.name}` : a.abilityId;
+}
+
+/** Tanks first: during a swap those are the bars you're watching. */
+const ROLE_ORDER = ['tank', 'healer', 'dps'] as const;
+
+/** A fighter's role, from the party defs (the replay actors don't carry it). */
+function roleOf(id: string, party?: { character: { id?: string; role?: string } }[]): string {
+  return party?.find((m) => (m.character.id ?? 'player') === id)?.character.role ?? 'dps';
+}
+
+/** Display name for a char id, from the party that is actually fighting. */
+function nameOf(charId: string, party: PartyLike): string {
+  return party.find((m) => (m.character.id ?? 'player') === charId)?.character.name ?? charId;
 }
 
 /** Signed m:ss delta vs a reference kill time. */
@@ -149,7 +168,7 @@ function CallsAdoption({ fight }: { fight: FightState }) {
       </div>
       {fight.calls.map((c, i) => (
         <div key={i} className="statline muted">
-          {mmss(c.atMs)} — {callLabel(c.action)}{' '}
+          {mmss(c.atMs)} — {callLabel(c.action, fight.partyMembers ?? [])}{' '}
           {adopted.has(i) ? (
             <span className="chip">adopted ✓</span>
           ) : (
@@ -362,12 +381,39 @@ export function FightView() {
           )}
 
       <div className="spacer" />
-      {players.map((p) => (
-        <div key={p.id}>
-          <HpBar actor={p} big={players.length === 1} />
-          <CastBar actor={p} playT={playT} />
+      {/*
+        At raid size a flat list of 10 frames pushes the combat log off-screen,
+        and an unsorted one makes the tanks (the bars that matter during a swap)
+        hard to find. Group by role and go two-column; the trinity is unaffected.
+      */}
+      {players.length > 5 ? (
+        <div className="raid-frames">
+          {ROLE_ORDER.map((role) => {
+            const group = players.filter((p) => roleOf(p.id, fight.partyMembers) === role);
+            if (group.length === 0) return null;
+            return (
+              <div key={role} className="raid-group">
+                <div className="raid-group-label muted">{role}</div>
+                <div className="raid-group-frames">
+                  {group.map((p) => (
+                    <div key={p.id} className="raid-frame">
+                      <HpBar actor={p} />
+                      <CastBar actor={p} playT={playT} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
-      ))}
+      ) : (
+        players.map((p) => (
+          <div key={p.id}>
+            <HpBar actor={p} big={players.length === 1} />
+            <CastBar actor={p} playT={playT} />
+          </div>
+        ))
+      )}
 
       {view.ended && (
         <>

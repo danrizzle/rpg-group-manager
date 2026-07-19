@@ -1,5 +1,12 @@
 # Phase 5 — local testing handoff
 
+> **EXECUTED 2026-07-19 — all steps passed.** Results are recorded in STATUS.md
+> under "Phase 5 — post-merge verification". Kept for provenance. Two fixes if
+> you re-run it: step 2's baseline must be **`c9ef804`** (post-merge, `main` *is*
+> the branch), and **step 3's `--trace` greps cannot work** — `--trace` prints
+> only the last 25–30 events, so mid-fight `targetChanged`/`buffRemoved` fall
+> outside the window; `test/raid.test.ts` asserts them instead.
+
 A prompt for Claude Code to verify the phase-5 work (branch
 `claude/phase-5-raid-scale-party-tlgitk`, PR #1) on a machine with the Docker
 dev environment. Everything below was written/verified in a remote container

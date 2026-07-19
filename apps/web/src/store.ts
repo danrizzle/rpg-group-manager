@@ -14,8 +14,11 @@ import {
   encounterById,
   familiarityBonus,
   levelForXp,
+  totalXpToReach,
+  LEVEL_CAP,
   makeCinderMaw,
   makeEmberForge,
+  makeCinderforge,
   makeMage,
   makePriest,
   makeWarrior,
@@ -43,18 +46,20 @@ import {
   type TalentTree,
   type TimedCall,
 } from '@rpg/engine';
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type {
   GrindRequest,
   GrindResponse,
+  RosterBuildInput,
   SimRequest,
   SimResponse,
   WorkerRequest,
   WorkerResponse,
 } from './sim/worker';
 import { BOSS_FACTORIES } from './sim/bosses';
-import { advanceAll } from './world/advance';
+import { advanceAll, type SharedSlice } from './world/advance';
 import {
   INITIAL_BUILDINGS,
   bankCapacity,
@@ -63,8 +68,10 @@ import {
   nextTier,
 } from './world/base';
 import { RECIPES_BY_ID, RESPEC_COST, resolveConsumables } from './world/professions';
+import { nextCharId, nextRecruitName, rosterSlots } from './world/roster';
 import {
   BRIDGE_COST,
+  WARCAMP_COST,
   DEFAULT_MULTIPLIER,
   GATHER_BLOCK_GAME_MS,
   GRIND_BLOCK_GAME_MS,
@@ -83,7 +90,8 @@ import type {
   Inventory,
   Materials,
   RegionId,
-  RosterCharId,
+  CharId,
+  ClassId,
   CharWorld,
   Task,
   TravelTask,
@@ -92,7 +100,7 @@ import type {
   WorldCharId,
   ZoneId,
 } from './world/types';
-import { WORLD_CHARS } from './world/types';
+import { FOUNDER_CHARS, FOUNDER_NAMES } from './world/types';
 
 /** Fixed base seed: the dummy sim is reproducible; only setup changes results. */
 const SIM_BASE_SEED = 42;
@@ -175,40 +183,89 @@ export function sanitizeConsumableSelection(ids: string[]): string[] {
   return ids.filter((id) => Boolean(CONSUMABLES_BY_ID[id])).slice(0, CONSUMABLE_SLOTS);
 }
 
-// ---- Roster (phase 4): the recruits' builds --------------------------------
-// Elara keeps her legacy top-level fields (zero-risk for live saves); Borin
-// (warrior) and Seren (priest) carry a RosterBuild each. Recruits arrive at
-// the cap in starter gear once Cinder Maw first dies.
+// ---- The roster (slice 8): one uniform record ------------------------------
+// Phase 4 kept Elara's build in legacy top-level store fields and gave the two
+// recruits a `RosterBuild` each, hidden behind `charBuild`. That asymmetry is
+// gone: EVERY character is a `CharacterBuild` in `characters`, keyed by CharId,
+// ordered by the explicit `rosterOrder`.
 
-export interface RosterBuild {
+/** Per-class content: kit factory, talent tree, starting gear, UI labels. */
+export interface ClassDef {
+  id: ClassId;
+  label: string;
+  role: string;
+  tree: TalentTree;
+  startingGear: GearSelection;
+}
+
+export const CLASSES: Record<ClassId, ClassDef> = {
+  mage: {
+    id: 'mage',
+    label: 'Mage',
+    role: 'dps',
+    tree: MAGE_TALENTS,
+    startingGear: { weapon: '', chest: '', ring: '', trinket: '' },
+  },
+  warrior: {
+    id: 'warrior',
+    label: 'Warrior',
+    role: 'tank',
+    tree: WARRIOR_TALENTS,
+    startingGear: { weapon: 'militia-blade', chest: 'padded-hauberk', ring: 'band-of-vigor', trinket: 'lucky-charm' },
+  },
+  priest: {
+    id: 'priest',
+    label: 'Priest',
+    role: 'healer',
+    tree: PRIEST_TALENTS,
+    startingGear: { weapon: 'novice-crook', chest: 'acolyte-robe', ring: 'band-of-clarity', trinket: 'lucky-charm' },
+  },
+};
+
+/** One roster member's whole build. Uniform across founders and recruits. */
+export interface CharacterBuild {
+  classId: ClassId;
+  name: string;
   stance: StanceConfig;
+  /**
+   * Earned-stat OVERRIDES layered on the class's own base — deliberately
+   * partial, not a full BehaviorOverrides.
+   *
+   * Each class ships a different base (`damageWhileMoving` is 0.6 mage / 0.8
+   * warrior / 0.5 priest), and phase 4 passed recruits only `{discipline}` so
+   * they kept theirs. Storing a full object here would silently flatten all
+   * three to the mage's numbers — a real balance change to the dungeon. Only
+   * Elara carries values, from her dev tuning sliders.
+   */
+  behavior: Partial<BehaviorOverrides>;
   gear: GearSelection;
   /** Equipped consumable slot ids (shared bank pool feeds the whole party). */
   consumables: string[];
-  /** Recruit talent selection (slice 6; their own tree per class). */
   talents: string[];
+  /**
+   * Own XP. v1 only Elara banks grind XP (recruits arrive at the cap, so a
+   * shared pool would silently inflate her level — see the slice-1 decision),
+   * but the field is per-character so levelling recruits needs no migration.
+   */
+  xp: number;
 }
 
-export const DEFAULT_ROSTER: Record<RosterCharId, RosterBuild> = {
-  warrior: {
+/** A fresh build for a class, at the level cap in that class's starting gear. */
+export function newCharacter(classId: ClassId, name: string): CharacterBuild {
+  return {
+    classId,
+    name,
     stance: { ...AUTO_PRESET },
-    gear: { weapon: 'militia-blade', chest: 'padded-hauberk', ring: 'band-of-vigor', trinket: 'lucky-charm' },
+    // Empty = "use the class's own base" (see CharacterBuild.behavior).
+    behavior: {},
+    gear: { ...CLASSES[classId].startingGear },
     consumables: [],
     talents: [],
-  },
-  priest: {
-    stance: { ...AUTO_PRESET },
-    gear: { weapon: 'novice-crook', chest: 'acolyte-robe', ring: 'band-of-clarity', trinket: 'lucky-charm' },
-    consumables: [],
-    talents: [],
-  },
-};
-
-/** The talent tree for a roster class (slice 6). */
-export const ROSTER_TALENT_TREES: Record<RosterCharId, TalentTree> = {
-  warrior: WARRIOR_TALENTS,
-  priest: PRIEST_TALENTS,
-};
+    // Recruits arrive at the cap (the phase-4 rule), expressed as XP now that
+    // level is derived per character rather than hardcoded to 10.
+    xp: totalXpToReach(LEVEL_CAP),
+  };
+}
 
 /** What the journal remembers of the last failed attempt (GDD §4 ⚰ line). */
 export interface JournalWipeNote {
@@ -223,54 +280,101 @@ export interface JournalEntry extends BossKnowledge {
   lastWipe?: JournalWipeNote;
 }
 
-/** Meta for the roster UI; build factories live in the engine. */
-export const ROSTER_CHARS: { id: RosterCharId; name: string; classLabel: string; role: string }[] = [
-  { id: 'warrior', name: 'Borin', classLabel: 'Warrior', role: 'tank' },
-  { id: 'priest', name: 'Seren', classLabel: 'Priest', role: 'healer' },
-];
-
-/** Repair a persisted roster build against current content. */
-function sanitizeRosterBuild(
-  build: Partial<RosterBuild> | undefined,
-  fallback: RosterBuild,
-  tree?: TalentTree,
-): RosterBuild {
+/** Repair a persisted character build against current content. */
+function sanitizeCharacter(
+  build: Partial<CharacterBuild> | undefined,
+  fallback: CharacterBuild,
+): CharacterBuild {
+  const classId = build?.classId ?? fallback.classId;
+  const cls = CLASSES[classId] ?? CLASSES[fallback.classId];
   const gear = { ...fallback.gear, ...(build?.gear ?? {}) };
   for (const [slot, id] of Object.entries(gear)) {
     if (id && !ITEMS_BY_ID[id]) gear[slot as GearSlot] = '';
   }
+  const xp = typeof build?.xp === 'number' ? build.xp : fallback.xp;
   return {
+    classId: cls.id,
+    name: build?.name ?? fallback.name,
     stance: { ...fallback.stance, ...(build?.stance ?? {}) },
+    behavior: { ...fallback.behavior, ...(build?.behavior ?? {}) },
     gear,
     consumables: sanitizeConsumableSelection(build?.consumables ?? []),
-    talents: tree
-      ? sanitizeTalentSelection(tree, build?.talents ?? [], talentPointsForLevel(10))
-      : [...(build?.talents ?? [])],
+    talents: sanitizeTalentSelection(
+      cls.tree,
+      build?.talents ?? [],
+      talentPointsForLevel(levelForXp(xp)),
+    ),
+    xp,
   };
 }
 
-const TALENT_COSTS: Record<string, number> = Object.fromEntries(
-  MAGE_TALENTS.nodes.map((n) => [n.id, n.cost]),
-);
-
-/** Points left to spend for a selection at the given level. */
-export function talentPointsRemaining(talents: string[], level: number): number {
-  const spent = talents.reduce((sum, id) => sum + (TALENT_COSTS[id] ?? 0), 0);
+/** Points left to spend for a selection in a tree at the given level. */
+export function talentPointsRemaining(
+  tree: TalentTree,
+  talents: string[],
+  level: number,
+): number {
+  const cost = new Map(tree.nodes.map((n) => [n.id, n.cost]));
+  const spent = talents.reduce((sum, id) => sum + (cost.get(id) ?? 0), 0);
   return talentPointsForLevel(level) - spent;
 }
 
 /** Drop stance settings whose unlocking talent isn't in the selection. */
-function stripLockedControls(stance: StanceConfig, talents: string[]): StanceConfig {
-  if (stance.barrierPolicy && !unlockedControls(MAGE_TALENTS, talents).has('barrier-policy')) {
+function stripLockedControls(
+  tree: TalentTree,
+  stance: StanceConfig,
+  talents: string[],
+): StanceConfig {
+  if (stance.barrierPolicy && !unlockedControls(tree, talents).has('barrier-policy')) {
     const { barrierPolicy: _, ...rest } = stance;
     return rest;
   }
   return stance;
 }
 
+/**
+ * Build a zustand updater that rewrites ONE character. Returning `null` from
+ * the patch function is the no-op signal (an invalid spend, a missing
+ * character), so every guard reads the same way.
+ */
+function patchChar(
+  charId: CharId,
+  fn: (c: CharacterBuild) => Partial<CharacterBuild> | null,
+): (s: Store) => Partial<Store> {
+  return (s) => {
+    const c = s.characters[charId];
+    if (!c) return {};
+    const patch = fn(c);
+    if (!patch) return {};
+    return { characters: { ...s.characters, [charId]: { ...c, ...patch } } };
+  };
+}
 
-/** Dungeon bosses simulatable on the dummy once the journal knows them. */
-export const DUNGEON_SIM_IDS = ['slagmaw', 'vulkan'];
+/**
+ * A fresh roster. All three founders always exist; the recruits are revealed by
+ * `unlocks.cinderMawKilled`, exactly as the phase-4 roster record was. Elara
+ * alone starts at level 1 — she is the character the game is played through.
+ */
+function defaultCharacters(): Record<CharId, CharacterBuild> {
+  return {
+    mage: {
+      ...newCharacter('mage', FOUNDER_NAMES['mage']!),
+      gear: { ...DEFAULT_GEAR_SELECTION },
+      // Elara alone exposes the dev tuning sliders, so she alone stores values.
+      behavior: { ...DEFAULT_BEHAVIOR },
+      xp: 0,
+    },
+    warrior: newCharacter('warrior', FOUNDER_NAMES['warrior']!),
+    priest: newCharacter('priest', FOUNDER_NAMES['priest']!),
+  };
+}
+
+
+/** Raid bosses — simulated against the RAID selection, not the trinity. */
+export const RAID_SIM_IDS = ['ashkar', 'vael'];
+
+/** Dungeon/raid bosses simulatable on the dummy once the journal knows them. */
+export const DUNGEON_SIM_IDS = ['slagmaw', 'vulkan', ...RAID_SIM_IDS];
 
 /**
  * The exact SimRequest the current build would produce — used both to fire
@@ -280,23 +384,39 @@ export const DUNGEON_SIM_IDS = ['slagmaw', 'vulkan'];
  * worker simulates the trinity against only what's been discovered.
  */
 export function buildSimRequest(
-  s: Pick<
-    Store,
-    | 'stance' | 'behavior' | 'gear' | 'xp' | 'talents' | 'equippedConsumables'
-    | 'simTarget' | 'roster' | 'journal' | 'familiarity' | 'plans'
-  >,
+  s: Pick<Store, 'characters' | 'simTarget' | 'journal' | 'familiarity' | 'plans' | 'raidRoster'>,
   iterations: number,
 ): SimRequest {
   const isDungeon = DUNGEON_SIM_IDS.includes(s.simTarget);
   const k = s.journal[s.simTarget];
   const fam = (charId: string) => familiarityBonus(s.familiarity[charId]?.[s.simTarget] ?? 0);
+  const mage = s.characters['mage']!;
+  const input = (charId: CharId): RosterBuildInput => {
+    const c = s.characters[charId]!;
+    return {
+      id: charId,
+      name: c.name,
+      classId: c.classId,
+      level: levelForXp(c.xp),
+      behavior: c.behavior,
+      stance: c.stance,
+      gear: c.gear,
+      consumables: [...c.consumables],
+      talents: [...c.talents],
+    };
+  };
+  // The dummy simulates whoever would actually fight it: the raid's saved
+  // selection for a raid boss, the trinity for a dungeon boss.
+  const party = (RAID_SIM_IDS.includes(s.simTarget) ? s.raidRoster : TRINITY).filter(
+    (id) => s.characters[id],
+  );
   return {
-    stance: s.stance,
-    behavior: s.behavior,
-    gear: s.gear,
-    level: levelForXp(s.xp),
-    talents: s.talents,
-    consumables: [...s.equippedConsumables],
+    stance: mage.stance,
+    behavior: { ...DEFAULT_BEHAVIOR, ...mage.behavior },
+    gear: mage.gear,
+    level: levelForXp(mage.xp),
+    talents: mage.talents,
+    consumables: [...mage.consumables],
     bossId: s.simTarget,
     ...(isDungeon
       ? {
@@ -307,21 +427,8 @@ export function buildSimRequest(
               lowestBossHpPct: k?.lowestBossHpPct ?? 100,
               attempts: k?.attempts ?? 0,
             },
-            roster: {
-              warrior: {
-                stance: s.roster.warrior.stance,
-                gear: s.roster.warrior.gear,
-                consumables: [...s.roster.warrior.consumables],
-                talents: [...s.roster.warrior.talents],
-              },
-              priest: {
-                stance: s.roster.priest.stance,
-                gear: s.roster.priest.gear,
-                consumables: [...s.roster.priest.consumables],
-                talents: [...s.roster.priest.talents],
-              },
-            },
-            familiarity: { warrior: fam('warrior'), priest: fam('priest'), mage: fam('mage') },
+            party: party.map(input),
+            familiarity: Object.fromEntries(party.map((id) => [id, fam(id)])),
             ...(s.plans[s.simTarget]?.entries.length ? { plan: s.plans[s.simTarget] } : {}),
           },
         }
@@ -384,25 +491,47 @@ export interface FightState {
 }
 
 interface Store {
-  // --- character build ---
-  stance: StanceConfig;
-  behavior: BehaviorOverrides;
-  gear: GearSelection;
-  talents: string[];
-  /** Equipped consumable slot ids ('' never stored; length ≤ CONSUMABLE_SLOTS). */
-  equippedConsumables: string[];
+  // --- the roster (slice 8): one uniform record, explicit order ---
+  characters: Record<CharId, CharacterBuild>;
+  /**
+   * Fold/display order. EXPLICIT, never `Object.keys(characters)`: it is the
+   * shared-bank fold order (so the capacity clamp stays deterministic between
+   * the live tick and offline catch-up) and it feeds `buildSimRequest`, whose
+   * staleness check is a whole-request JSON compare — unstable key order there
+   * would make every sim look stale.
+   */
+  rosterOrder: CharId[];
+  /** Which character the build panel shows. */
+  activeChar: CharId;
+  setActiveChar: (c: CharId) => void;
+  /**
+   * Fill an earned slot with a character of the chosen class (GDD §2: slots
+   * come from milestones, never purchase — this only spends a slot).
+   */
+  recruit: (classId: ClassId) => void;
+
   loadouts: Loadout[];
-  setStance: (patch: Partial<StanceConfig>) => void;
-  setBehavior: (patch: Partial<BehaviorOverrides>) => void;
-  setGear: (slot: GearSlot, itemId: string) => void;
-  setConsumableSlot: (slot: number, id: string) => void;
-  applyAutoPreset: () => void;
-  spendTalent: (id: string) => void;
-  refundTalent: (id: string) => void;
-  respecTalents: () => void;
-  saveLoadout: (name: string) => void;
-  applyLoadout: (name: string) => void;
-  deleteLoadout: (name: string) => void;
+  setStance: (charId: CharId, patch: Partial<StanceConfig>) => void;
+  setBehavior: (charId: CharId, patch: Partial<BehaviorOverrides>) => void;
+  setGear: (charId: CharId, slot: GearSlot, itemId: string) => void;
+  setConsumableSlot: (charId: CharId, slot: number, id: string) => void;
+  applyAutoPreset: (charId: CharId) => void;
+  spendTalent: (charId: CharId, id: string) => void;
+  refundTalent: (charId: CharId, id: string) => void;
+  respecTalents: (charId: CharId) => void;
+  saveLoadout: (charId: CharId, name: string) => void;
+  applyLoadout: (charId: CharId, name: string) => void;
+  /** Names are unique PER CLASS, so deleting needs the class too. */
+  deleteLoadout: (classId: ClassId, name: string) => void;
+  /**
+   * Per-boss loadout assignment (GDD §2): encounter id → char id → loadout
+   * name. Applied on demand from the encounter, never silently at pull time —
+   * the character panel must keep showing what a character will actually wear.
+   */
+  bossLoadouts: Record<string, Record<CharId, string>>;
+  assignBossLoadout: (encounterId: string, charId: CharId, name: string) => void;
+  /** Apply every assignment for an encounter; skips ones that no longer exist. */
+  equipForBoss: (encounterId: string) => void;
 
   // --- training dummy (worker) ---
   sim: SimState;
@@ -417,19 +546,16 @@ interface Store {
   attempts: Record<string, AttemptRecord>;
   pull: (bossId?: string) => void;
 
-  // --- roster & dungeon (phase 4) ---
-  roster: Record<RosterCharId, RosterBuild>;
-  setRosterStance: (char: RosterCharId, patch: Partial<StanceConfig>) => void;
-  setRosterGear: (char: RosterCharId, slot: GearSlot, itemId: string) => void;
-  setRosterConsumableSlot: (char: RosterCharId, slot: number, id: string) => void;
-  spendRosterTalent: (char: RosterCharId, id: string) => void;
-  refundRosterTalent: (char: RosterCharId, id: string) => void;
-  respecRosterTalents: (char: RosterCharId) => void;
-  /** Which character the build panel shows ('elara' = the legacy fields). */
-  activeChar: 'elara' | RosterCharId;
-  setActiveChar: (c: 'elara' | RosterCharId) => void;
-  /** Ember Forge progress: encounter id → cleared (linear unlock chain). */
+  // --- dungeon (phase 4) ---
+  /** Dungeon/raid progress: encounter id → cleared (linear unlock chain). */
   dungeonCleared: Record<string, boolean>;
+  /**
+   * Who raids. The roster is deliberately bigger than the raid (GDD §2 via the
+   * slice-9 ramp), so the ten who go are an explicit, persisted choice — that
+   * is what makes benching real, and per-boss familiarity gives it weight.
+   */
+  raidRoster: CharId[];
+  toggleRaidMember: (charId: CharId) => void;
   pullEncounter: (encounterId: string) => void;
   recordEncounterCleared: (encounterId: string) => void;
   /** Issue live calls (slice 6): append at the frontier + re-run deterministically. */
@@ -457,8 +583,6 @@ interface Store {
   // --- world loop ---
   view: View;
   setView: (v: View) => void;
-  /** Elara's XP (v1: recruits arrive at the cap, so only she banks grind XP). */
-  xp: number;
   unlocks: Unlocks;
   materials: Materials;
   inventory: Inventory;
@@ -487,6 +611,8 @@ interface Store {
   catchUp: () => void;
   recordBossKill: (boss: BossId) => void;
   buildBridge: () => void;
+  /** Raise the Cinder Wastes access building → the Cinderforge raid. */
+  buildWarcamp: () => void;
 }
 
 const DEFAULT_UNLOCKS: Unlocks = {
@@ -494,6 +620,34 @@ const DEFAULT_UNLOCKS: Unlocks = {
   bridgeBuilt: false,
   emberwingKilled: false,
   cinderMawKilled: false,
+  raidAccess: false,
+};
+
+const DEFAULT_MATERIALS: Materials = {
+  bridgeTimber: 0,
+  sunleaf: 0,
+  emberbloom: 0,
+  forgeSeal: 0,
+  emberCatalyst: 0,
+};
+
+/**
+ * Encounters that hand out a trophy on a first clear. Guaranteed, not a drop
+ * table: loot rules are an open GDD question (STATUS "open design questions"),
+ * and a deterministic reward gives the Warcamp a gate without inventing them.
+ */
+const CLEAR_REWARDS: Record<string, Partial<Materials>> = {
+  vulkan: { forgeSeal: 1 },
+};
+
+/**
+ * Materials paid out on EVERY kill, not just the first (unlike CLEAR_REWARDS).
+ * This is the catalyst faucet: raid bosses stay worth re-killing because they
+ * are the only source of the tier-2 crafting material (GDD §6).
+ */
+const KILL_REWARDS: Record<string, Partial<Materials>> = {
+  ashkar: { emberCatalyst: 2 },
+  vael: { emberCatalyst: 2 },
 };
 
 /**
@@ -519,6 +673,99 @@ function resolvePartySlots(
   });
 }
 
+/**
+ * The world reducer's shared pools. `xp` is Elara's, which lives on her build
+ * now — these two adapters keep `advanceAll` unaware of the character record.
+ */
+function sharedSlice(s: Pick<Store, 'characters' | 'materials' | 'inventory' | 'buildings'>): SharedSlice {
+  return {
+    xp: s.characters['mage']?.xp ?? 0,
+    materials: s.materials,
+    inventory: s.inventory,
+    buildings: s.buildings,
+  };
+}
+
+function applyShared(
+  s: Pick<Store, 'characters'>,
+  shared: SharedSlice,
+): Pick<Store, 'characters' | 'materials' | 'inventory' | 'buildings'> {
+  const mage = s.characters['mage']!;
+  return {
+    characters:
+      shared.xp === mage.xp ? s.characters : { ...s.characters, mage: { ...mage, xp: shared.xp } },
+    materials: shared.materials,
+    inventory: shared.inventory,
+    buildings: shared.buildings,
+  };
+}
+
+/** Engine kit factories, keyed by class. All share the same signature. */
+export const MAKERS: Record<ClassId, typeof makeMage> = {
+  mage: makeMage,
+  warrior: makeWarrior,
+  priest: makePriest,
+};
+
+/**
+ * The party order the trinity dungeon has always pulled in. Order is load-
+ * bearing: `resolvePartySlots` claims shared-bank stock in it. Slice 11 passes
+ * a raid's selection here instead.
+ */
+const TRINITY: CharId[] = ['warrior', 'priest', 'mage'];
+
+/** Above this party size an encounter is a raid (needs access + a selection). */
+const MAX_TRINITY = 5;
+
+/** Every dungeon the web can pull, in progression order. */
+export const DUNGEONS = [makeEmberForge, makeCinderforge];
+
+/** The raid's fixed size — content decides sizes, never a knob (GDD §2). */
+export const RAID_SIZE = makeCinderforge().partySize.min;
+
+/**
+ * Build a party from roster ids: resolve shared-bank slots in party order,
+ * make each kit, stamp a unique engine id, then apply comp rules.
+ *
+ * Ids are stamped AFTER the factory and BEFORE `applyComp` (the recipe the
+ * CLI's `--raid` path uses): every `make*` hardcodes its class id, so two
+ * warriors would collide on `Fight`'s duplicate-id guard. Here the CharId is
+ * already unique per roster member, so it is simply carried through.
+ */
+function assembleParty(
+  characters: Record<CharId, CharacterBuild>,
+  charIds: CharId[],
+  inventory: Inventory,
+  fam: (charId: CharId) => number,
+): { defs: CharacterDef[]; party: PartyMember[]; consumables: ConsumableDefinition[][] } {
+  const members = charIds.map((id) => characters[id]).filter((c): c is CharacterBuild => Boolean(c));
+  const ids = charIds.filter((id) => characters[id]);
+  const consumables = resolvePartySlots(members.map((c) => c.consumables), inventory);
+
+  const defs = applyComp(
+    members.map((c, i) => ({
+      ...MAKERS[c.classId](
+        // Partial override on the class base — never a full behavior object.
+        { ...c.behavior, discipline: (c.behavior.discipline ?? DEFAULT_BEHAVIOR.discipline) + fam(ids[i]!) },
+        resolveGear(c.gear),
+        levelForXp(c.xp),
+        c.talents,
+        consumables[i] ?? [],
+      ),
+      id: ids[i]!,
+      name: c.name,
+    })),
+    GROUP_CDS,
+    COMP_PASSIVES,
+  );
+
+  const party: PartyMember[] = defs.map((character, i) => ({
+    character,
+    stance: { ...members[i]!.stance },
+  }));
+  return { defs, party, consumables };
+}
+
 const uid = (): string =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
@@ -534,60 +781,107 @@ function emptyCharWorlds(): Record<WorldCharId, CharWorld> {
 }
 
 /**
- * The one uniform per-character build selector (the asymmetry phase 4 promised
- * to hide but never actually did): Elara is the legacy top-level fields,
- * recruits are `RosterBuild`s with no behavior/talents/xp of their own — they
- * get the class defaults and the level cap, exactly as `pullEncounter` builds
- * them. Slice 6 replaces this with a real `characters{}` record.
+ * The uniform per-character build selector. Slice 8 made this a plain record
+ * lookup: there is no Elara-vs-recruit branch left, and `level` is derived from
+ * each character's own XP rather than hardcoded to the cap for recruits.
  */
 function charBuild(
-  s: Pick<Store, 'stance' | 'behavior' | 'gear' | 'xp' | 'talents' | 'roster'>,
-  charId: WorldCharId,
+  s: Pick<Store, 'characters'>,
+  charId: CharId,
 ): {
+  classId: ClassId;
+  name: string;
   stance: StanceConfig;
-  behavior: BehaviorOverrides;
+  behavior: Partial<BehaviorOverrides>;
   gear: GearSelection;
   level: number;
   talents: string[];
+  consumables: string[];
 } {
-  if (charId === 'mage') {
-    return {
-      stance: s.stance,
-      behavior: s.behavior,
-      gear: s.gear,
-      level: levelForXp(s.xp),
-      talents: s.talents,
-    };
-  }
-  const build = s.roster[charId];
+  const c = s.characters[charId] ?? newCharacter('mage', charId);
   return {
-    stance: build.stance,
-    behavior: { ...DEFAULT_BEHAVIOR },
-    gear: build.gear,
-    level: 10,
-    talents: build.talents,
+    classId: c.classId,
+    name: c.name,
+    stance: c.stance,
+    behavior: c.behavior,
+    gear: c.gear,
+    level: levelForXp(c.xp),
+    talents: c.talents,
+    consumables: c.consumables,
   };
 }
 
 /**
  * React-side twin of `charBuild`. Each field is selected separately so every
- * subscription returns a stable reference (a store object, a module constant
- * or a primitive) — selecting the whole build object would allocate a fresh
- * one per render and thrash.
+ * subscription returns a stable reference (a store object or a primitive) —
+ * selecting the whole build object would allocate a fresh one per render and
+ * thrash.
  */
-export function useCharBuild(charId: WorldCharId): {
+export function useCharBuild(charId: CharId): {
+  classId: ClassId;
+  name: string;
   stance: StanceConfig;
-  behavior: BehaviorOverrides;
+  behavior: Partial<BehaviorOverrides>;
   gear: GearSelection;
   level: number;
   talents: string[];
+  consumables: string[];
 } {
-  const stance = useStore((s) => (charId === 'mage' ? s.stance : s.roster[charId].stance));
-  const gear = useStore((s) => (charId === 'mage' ? s.gear : s.roster[charId].gear));
-  const behavior = useStore((s) => (charId === 'mage' ? s.behavior : DEFAULT_BEHAVIOR));
-  const talents = useStore((s) => (charId === 'mage' ? s.talents : s.roster[charId].talents));
-  const level = useStore((s) => (charId === 'mage' ? levelForXp(s.xp) : 10));
-  return { stance, gear, behavior, talents, level };
+  const classId = useStore((s) => s.characters[charId]?.classId ?? 'mage');
+  const name = useStore((s) => s.characters[charId]?.name ?? charId);
+  const stance = useStore((s) => s.characters[charId]?.stance ?? AUTO_PRESET);
+  const gear = useStore((s) => s.characters[charId]?.gear ?? EMPTY_GEAR);
+  const behavior = useStore((s) => s.characters[charId]?.behavior ?? EMPTY_BEHAVIOR);
+  const talents = useStore((s) => s.characters[charId]?.talents ?? EMPTY_IDS);
+  const consumables = useStore((s) => s.characters[charId]?.consumables ?? EMPTY_IDS);
+  const level = useStore((s) => levelForXp(s.characters[charId]?.xp ?? 0));
+  return { classId, name, stance, gear, behavior, talents, level, consumables };
+}
+
+/** Meta for the roster UI, in roster order. Replaces the old ROSTER_CHARS literal. */
+export function useRoster(): { id: CharId; name: string; classId: ClassId; classLabel: string; role: string }[] {
+  const characters = useStore((s) => s.characters);
+  const order = useStore((s) => s.rosterOrder);
+  return order
+    .filter((id) => characters[id])
+    .map((id) => {
+      const c = characters[id]!;
+      return {
+        id,
+        name: c.name,
+        classId: c.classId,
+        classLabel: CLASSES[c.classId].label,
+        role: CLASSES[c.classId].role,
+      };
+    });
+}
+
+/**
+ * The party that would pull an encounter, built for UI preview (plan palette,
+ * comp checks). Consumables resolve at nominal charges — no stock is consulted
+ * and nothing is spent; only real pulls touch the bank.
+ */
+export function usePreviewParty(isRaid: boolean): PartyMember[] {
+  const characters = useStore((s) => s.characters);
+  const raidRoster = useStore((s) => s.raidRoster);
+  return useMemo(() => {
+    const ids = (isRaid ? raidRoster : TRINITY).filter((id) => characters[id]);
+    return assembleParty(characters, ids, {}, () => 0).party;
+  }, [characters, raidRoster, isRaid]);
+}
+
+/** Stable empty fallbacks — a fresh literal per render would thrash subscriptions. */
+const EMPTY_IDS: string[] = [];
+const EMPTY_GEAR: GearSelection = { weapon: '', chest: '', ring: '', trinket: '' };
+const EMPTY_BEHAVIOR: Partial<BehaviorOverrides> = {};
+
+/**
+ * A character's world presence, guaranteed present. `chars` is keyed by the
+ * open `CharId` type, so every lookup is optional to the compiler; recruits
+ * added mid-save start idle at the starting region rather than crashing.
+ */
+function charWorld(s: Pick<Store, 'chars'>, charId: CharId): CharWorld {
+  return s.chars[charId] ?? { region: 'heartfield', queue: [] };
 }
 
 /** The region the character will be in once all currently-queued travel resolves. */
@@ -627,51 +921,88 @@ export const useStore = create<Store>()(
       const post = (envelope: WorkerRequest) => worker.postMessage(envelope);
 
       return {
-        stance: { ...AUTO_PRESET },
-        behavior: { ...DEFAULT_BEHAVIOR },
-        gear: { ...DEFAULT_GEAR_SELECTION },
-        talents: [],
-        equippedConsumables: [],
-        loadouts: [],
-        setStance: (patch) => set((s) => ({ stance: { ...s.stance, ...patch } })),
-        setBehavior: (patch) => set((s) => ({ behavior: { ...s.behavior, ...patch } })),
-        setGear: (slot, itemId) => set((s) => ({ gear: { ...s.gear, [slot]: itemId } })),
-        setConsumableSlot: (slot, id) =>
+        characters: defaultCharacters(),
+        rosterOrder: [...FOUNDER_CHARS],
+        activeChar: 'mage',
+        setActiveChar: (c) => set((s) => (s.characters[c] ? { activeChar: c } : {})),
+        recruit: (classId) =>
           set((s) => {
-            if (slot < 0 || slot >= CONSUMABLE_SLOTS) return {};
-            const slots = Array.from({ length: CONSUMABLE_SLOTS }, (_, i) => s.equippedConsumables[i] ?? '');
-            slots[slot] = CONSUMABLES_BY_ID[id] ? id : '';
-            return { equippedConsumables: slots.filter((x) => x !== '') };
-          }),
-        applyAutoPreset: () => set({ stance: { ...AUTO_PRESET } }),
-
-        spendTalent: (id) =>
-          set((s) => {
-            const node = MAGE_TALENTS.nodes.find((n) => n.id === id);
-            if (!node || s.talents.includes(id)) return {};
-            if ((node.requires ?? []).some((req) => !s.talents.includes(req))) return {};
-            if (node.cost > talentPointsRemaining(s.talents, levelForXp(s.xp))) return {};
-            return { talents: [...s.talents, id] };
-          }),
-        refundTalent: (id) =>
-          set((s) => {
-            if (!s.talents.includes(id)) return {};
-            const dependent = MAGE_TALENTS.nodes.some(
-              (n) => s.talents.includes(n.id) && (n.requires ?? []).includes(id),
+            if (!CLASSES[classId]) return {};
+            // A slot must be earned and free. Never blocks with an error — the
+            // UI only offers the button when there's room.
+            const slots = rosterSlots({ unlocks: s.unlocks, dungeonCleared: s.dungeonCleared });
+            if (s.rosterOrder.length >= slots) return {};
+            const id = nextCharId(classId, s.rosterOrder);
+            const name = nextRecruitName(
+              classId,
+              s.rosterOrder.map((c) => s.characters[c]?.name ?? ''),
             );
-            if (dependent) return {};
-            const talents = s.talents.filter((t) => t !== id);
-            return { talents, stance: stripLockedControls(s.stance, talents) };
-          }),
-        // Respec costs herbs (GDD §2 "small resource cost") — payable from the
-        // start region, so it's never a hard lock.
-        respecTalents: () =>
-          set((s) => {
-            if (s.talents.length === 0) return {};
-            if ((s.materials[RESPEC_COST.material] ?? 0) < RESPEC_COST.count) return {};
             return {
-              talents: [],
-              stance: stripLockedControls(s.stance, []),
+              characters: { ...s.characters, [id]: newCharacter(classId, name) },
+              rosterOrder: [...s.rosterOrder, id],
+              // A recruit joins wherever the party already is, idle.
+              chars: {
+                ...s.chars,
+                [id]: { region: charWorld(s, 'mage').region, queue: [] },
+              },
+            };
+          }),
+
+        loadouts: [],
+        setStance: (charId, patch) =>
+          set(patchChar(charId, (c) => ({ stance: { ...c.stance, ...patch } }))),
+        setBehavior: (charId, patch) =>
+          set(patchChar(charId, (c) => ({ behavior: { ...c.behavior, ...patch } }))),
+        setGear: (charId, slot, itemId) =>
+          set(patchChar(charId, (c) => ({ gear: { ...c.gear, [slot]: itemId } }))),
+        setConsumableSlot: (charId, slot, id) =>
+          set(
+            patchChar(charId, (c) => {
+              if (slot < 0 || slot >= CONSUMABLE_SLOTS) return null;
+              const slots = Array.from({ length: CONSUMABLE_SLOTS }, (_, i) => c.consumables[i] ?? '');
+              slots[slot] = CONSUMABLES_BY_ID[id] ? id : '';
+              return { consumables: slots.filter((x) => x !== '') };
+            }),
+          ),
+        applyAutoPreset: (charId) => set(patchChar(charId, () => ({ stance: { ...AUTO_PRESET } }))),
+
+        spendTalent: (charId, id) =>
+          set(
+            patchChar(charId, (c) => {
+              const tree = CLASSES[c.classId].tree;
+              const node = tree.nodes.find((n) => n.id === id);
+              if (!node || c.talents.includes(id)) return null;
+              if ((node.requires ?? []).some((req) => !c.talents.includes(req))) return null;
+              if (node.cost > talentPointsRemaining(tree, c.talents, levelForXp(c.xp))) return null;
+              return { talents: [...c.talents, id] };
+            }),
+          ),
+        refundTalent: (charId, id) =>
+          set(
+            patchChar(charId, (c) => {
+              if (!c.talents.includes(id)) return null;
+              const tree = CLASSES[c.classId].tree;
+              const dependent = tree.nodes.some(
+                (n) => c.talents.includes(n.id) && (n.requires ?? []).includes(id),
+              );
+              if (dependent) return null;
+              const talents = c.talents.filter((t) => t !== id);
+              return { talents, stance: stripLockedControls(tree, c.stance, talents) };
+            }),
+          ),
+        // Respec costs herbs (GDD §2 "small resource cost") — payable from the
+        // start region, so it's never a hard lock. Charged once, per character.
+        respecTalents: (charId) =>
+          set((s) => {
+            const c = s.characters[charId];
+            if (!c || c.talents.length === 0) return {};
+            if ((s.materials[RESPEC_COST.material] ?? 0) < RESPEC_COST.count) return {};
+            const tree = CLASSES[c.classId].tree;
+            return {
+              characters: {
+                ...s.characters,
+                [charId]: { ...c, talents: [], stance: stripLockedControls(tree, c.stance, []) },
+              },
               materials: {
                 ...s.materials,
                 [RESPEC_COST.material]: s.materials[RESPEC_COST.material] - RESPEC_COST.count,
@@ -679,42 +1010,86 @@ export const useStore = create<Store>()(
             };
           }),
 
-        saveLoadout: (name) =>
+        saveLoadout: (charId, name) =>
           set((s) => {
+            const c = s.characters[charId];
+            if (!c) return {};
             const loadout: Loadout = {
               name,
-              stance: { ...s.stance },
-              talents: [...s.talents],
-              gear: { ...s.gear },
-              consumables: [...s.equippedConsumables],
-              classId: 'mage',
+              stance: { ...c.stance },
+              talents: [...c.talents],
+              gear: { ...c.gear },
+              consumables: [...c.consumables],
+              classId: c.classId,
             };
-            const others = s.loadouts.filter((l) => l.name !== name);
+            // Unique per (class, name): "Raid" can mean one thing for a mage
+            // and another for a warrior, and a global name space would have
+            // them overwrite each other.
+            const others = s.loadouts.filter(
+              (l) => !(l.name === name && l.classId === c.classId),
+            );
             return { loadouts: [...others, loadout] };
           }),
-        applyLoadout: (name) =>
+        applyLoadout: (charId, name) =>
+          set(
+            patchChar(charId, (c) => {
+              const saved = get().loadouts.find(
+                (l) => l.name === name && l.classId === c.classId,
+              );
+              // A loadout only applies to its own class — gear and talents from
+              // another class would sanitize away to nothing.
+              if (!saved || saved.classId !== c.classId) return null;
+              // The stored loadout is never mutated; the applied copy is
+              // repaired against current content and the level's point budget.
+              const tree = CLASSES[c.classId].tree;
+              const talents = sanitizeTalentSelection(
+                tree,
+                saved.talents,
+                talentPointsForLevel(levelForXp(c.xp)),
+              );
+              const gear = Object.fromEntries(
+                Object.entries(saved.gear).map(([slot, id]) => [slot, ITEMS_BY_ID[id] ? id : '']),
+              ) as GearSelection;
+              return {
+                talents,
+                gear,
+                stance: stripLockedControls(tree, { ...saved.stance }, talents),
+                consumables: sanitizeConsumableSelection(saved.consumables ?? []),
+              };
+            }),
+          ),
+        deleteLoadout: (classId, name) =>
+          set((s) => ({
+            loadouts: s.loadouts.filter((l) => !(l.name === name && l.classId === classId)),
+            // Drop assignments that pointed at it, so no boss keeps a dangling
+            // reference the equip button would silently skip.
+            bossLoadouts: Object.fromEntries(
+              Object.entries(s.bossLoadouts).map(([enc, byChar]) => [
+                enc,
+                Object.fromEntries(
+                  Object.entries(byChar).filter(
+                    ([cid, n]) => !(n === name && s.characters[cid]?.classId === classId),
+                  ),
+                ),
+              ]),
+            ),
+          })),
+
+        bossLoadouts: {},
+        assignBossLoadout: (encounterId, charId, name) =>
           set((s) => {
-            const saved = s.loadouts.find((l) => l.name === name);
-            if (!saved) return {};
-            // The stored loadout is never mutated; the applied copy is repaired
-            // against current content and the current level's point budget.
-            const talents = sanitizeTalentSelection(
-              MAGE_TALENTS,
-              saved.talents,
-              talentPointsForLevel(levelForXp(s.xp)),
-            );
-            const gear = Object.fromEntries(
-              Object.entries(saved.gear).map(([slot, id]) => [slot, ITEMS_BY_ID[id] ? id : '']),
-            ) as GearSelection;
-            return {
-              talents,
-              gear,
-              stance: stripLockedControls({ ...saved.stance }, talents),
-              equippedConsumables: sanitizeConsumableSelection(saved.consumables ?? []),
-            };
+            const byChar = { ...(s.bossLoadouts[encounterId] ?? {}) };
+            if (name) byChar[charId] = name;
+            else delete byChar[charId];
+            return { bossLoadouts: { ...s.bossLoadouts, [encounterId]: byChar } };
           }),
-        deleteLoadout: (name) =>
-          set((s) => ({ loadouts: s.loadouts.filter((l) => l.name !== name) })),
+        equipForBoss: (encounterId) => {
+          for (const [charId, name] of Object.entries(get().bossLoadouts[encounterId] ?? {})) {
+            // applyLoadout already no-ops on a class mismatch or a missing
+            // loadout, so a stale assignment is skipped rather than throwing.
+            get().applyLoadout(charId, name);
+          }
+        },
 
         sim: { running: false, result: null },
         simTarget: 'cinder-maw',
@@ -736,11 +1111,12 @@ export const useStore = create<Store>()(
         fight: null,
         attempts: {},
         pull: (bossId = 'cinder-maw') => {
-          const { stance, behavior, gear, xp, talents, equippedConsumables, inventory, attempts } = get();
+          const { characters, inventory, attempts } = get();
+          const { behavior, gear, stance, talents, xp, consumables } = characters['mage']!;
           const seed = Math.floor(Math.random() * 2 ** 31);
           // Slots the current stock can actually cover; short slots are
           // skipped for this fight (never blocks the pull).
-          const defs = resolveConsumables(equippedConsumables, inventory);
+          const defs = resolveConsumables(consumables, inventory);
           const player = makeMage(behavior, resolveGear(gear), levelForXp(xp), talents, defs);
           const boss = (BOSS_FACTORIES[bossId] ?? makeCinderMaw)();
           const result = runFight({ player, boss, stance, seed });
@@ -793,71 +1169,23 @@ export const useStore = create<Store>()(
           });
         },
 
-        // ---- roster & dungeon (phase 4) ----
-        roster: {
-          warrior: sanitizeRosterBuild(undefined, DEFAULT_ROSTER.warrior, WARRIOR_TALENTS),
-          priest: sanitizeRosterBuild(undefined, DEFAULT_ROSTER.priest, PRIEST_TALENTS),
-        },
-        setRosterStance: (char, patch) =>
-          set((s) => ({
-            roster: {
-              ...s.roster,
-              [char]: { ...s.roster[char], stance: { ...s.roster[char].stance, ...patch } },
-            },
-          })),
-        setRosterGear: (char, slot, itemId) =>
-          set((s) => ({
-            roster: {
-              ...s.roster,
-              [char]: { ...s.roster[char], gear: { ...s.roster[char].gear, [slot]: itemId } },
-            },
-          })),
-        setRosterConsumableSlot: (char, slot, id) =>
-          set((s) => {
-            if (slot < 0 || slot >= CONSUMABLE_SLOTS) return {};
-            const cur = s.roster[char].consumables;
-            const slots = Array.from({ length: CONSUMABLE_SLOTS }, (_, i) => cur[i] ?? '');
-            slots[slot] = CONSUMABLES_BY_ID[id] ? id : '';
-            return {
-              roster: {
-                ...s.roster,
-                [char]: { ...s.roster[char], consumables: slots.filter((x) => x !== '') },
-              },
-            };
-          }),
-        spendRosterTalent: (char, id) =>
-          set((s) => {
-            const tree = ROSTER_TALENT_TREES[char];
-            const cur = s.roster[char].talents;
-            const node = tree.nodes.find((n) => n.id === id);
-            if (!node || cur.includes(id)) return {};
-            if ((node.requires ?? []).some((req) => !cur.includes(req))) return {};
-            const spent = cur.reduce((sum, t) => sum + (tree.nodes.find((n) => n.id === t)?.cost ?? 0), 0);
-            if (node.cost > talentPointsForLevel(10) - spent) return {};
-            return { roster: { ...s.roster, [char]: { ...s.roster[char], talents: [...cur, id] } } };
-          }),
-        refundRosterTalent: (char, id) =>
-          set((s) => {
-            const tree = ROSTER_TALENT_TREES[char];
-            const cur = s.roster[char].talents;
-            if (!cur.includes(id)) return {};
-            const dependent = tree.nodes.some((n) => cur.includes(n.id) && (n.requires ?? []).includes(id));
-            if (dependent) return {};
-            return { roster: { ...s.roster, [char]: { ...s.roster[char], talents: cur.filter((t) => t !== id) } } };
-          }),
-        respecRosterTalents: (char) =>
-          set((s) => {
-            if (s.roster[char].talents.length === 0) return {};
-            if ((s.materials[RESPEC_COST.material] ?? 0) < RESPEC_COST.count) return {};
-            return {
-              roster: { ...s.roster, [char]: { ...s.roster[char], talents: [] } },
-              materials: { ...s.materials, [RESPEC_COST.material]: s.materials[RESPEC_COST.material] - RESPEC_COST.count },
-            };
-          }),
-        activeChar: 'elara',
-        setActiveChar: (c) => set({ activeChar: c }),
-
+        // ---- dungeon (phase 4) / raid (phase 5) ----
         dungeonCleared: {},
+        raidRoster: [],
+        toggleRaidMember: (charId) =>
+          set((s) => {
+            if (!s.characters[charId]) return {};
+            if (s.raidRoster.includes(charId)) {
+              return { raidRoster: s.raidRoster.filter((id) => id !== charId) };
+            }
+            // The cap is the raid's size; the UI disables adds past it too.
+            if (s.raidRoster.length >= RAID_SIZE) return {};
+            // Keep selection in roster order so the party is assembled the same
+            // way every pull -- the shared-bank claim order and the group-CD
+            // carrier both read it.
+            const next = [...s.raidRoster, charId];
+            return { raidRoster: s.rosterOrder.filter((id) => next.includes(id)) };
+          }),
         journal: {},
         familiarity: {},
         plans: {},
@@ -871,61 +1199,38 @@ export const useStore = create<Store>()(
           ),
         pullEncounter: (encounterId) => {
           const {
-            stance, behavior, gear, xp, talents, equippedConsumables,
-            roster, inventory, attempts, unlocks, dungeonCleared, familiarity,
+            characters, inventory, attempts, unlocks, dungeonCleared, familiarity, raidRoster,
           } = get();
           if (!unlocks.cinderMawKilled) return;
-          const dungeon = makeEmberForge();
+          // Find the encounter in whichever dungeon owns it.
+          const dungeon = DUNGEONS.map((d) => d()).find((d) =>
+            d.encounters.some((e) => e.id === encounterId),
+          );
+          if (!dungeon) return;
           const enc = encounterById(dungeon, encounterId);
           if (!enc) return;
-          // Linear gate: trash before Slagmaw before Vulkan.
+          const isRaid = dungeon.partySize.min > MAX_TRINITY;
+          if (isRaid && !unlocks.raidAccess) return;
+          // Linear gate: each encounter needs the previous one cleared.
           const idx = dungeon.encounters.findIndex((e) => e.id === encounterId);
           if (idx > 0 && !dungeonCleared[dungeon.encounters[idx - 1]!.id]) return;
 
-          // Slots claim the SHARED bank stock in party order; short slots are
-          // skipped for this fight (never blocks the pull).
-          const [wCons, pCons, mCons] = resolvePartySlots(
-            [roster.warrior.consumables, roster.priest.consumables, equippedConsumables],
-            inventory,
-          ) as [ConsumableDefinition[], ConsumableDefinition[], ConsumableDefinition[]];
+          // The raid fields the saved selection; dungeons stay on the trinity.
+          const roster = isRaid ? raidRoster.filter((id) => characters[id]) : TRINITY;
+          if (isRaid && roster.length !== dungeon.partySize.min) return;
+
           // Boss familiarity (GDD §2): attempts at THIS boss sharpen each
           // character — bonus discipline on top of their earned stat.
           const fam = (charId: string): number =>
             enc.kind === 'boss'
               ? familiarityBonus(familiarity[charId]?.[encounterId] ?? 0)
               : 0;
-          const defs = applyComp(
-            [
-              makeWarrior(
-                { discipline: DEFAULT_BEHAVIOR.discipline + fam('warrior') },
-                resolveGear(roster.warrior.gear),
-                10,
-                roster.warrior.talents,
-                wCons,
-              ),
-              makePriest(
-                { discipline: DEFAULT_BEHAVIOR.discipline + fam('priest') },
-                resolveGear(roster.priest.gear),
-                10,
-                roster.priest.talents,
-                pCons,
-              ),
-              makeMage(
-                { ...behavior, discipline: behavior.discipline + fam('mage') },
-                resolveGear(gear),
-                levelForXp(xp),
-                talents,
-                mCons,
-              ),
-            ],
-            GROUP_CDS,
-            COMP_PASSIVES,
+          const { defs, party, consumables: partyCons } = assembleParty(
+            characters,
+            roster,
+            inventory,
+            fam,
           );
-          const party: PartyMember[] = [
-            { character: defs[0]!, stance: { ...roster.warrior.stance } },
-            { character: defs[1]!, stance: { ...roster.priest.stance } },
-            { character: defs[2]!, stance: { ...stance } },
-          ];
           const seed = Math.floor(Math.random() * 2 ** 31);
           // The boss plan rides along on boss pulls (sanitized against the
           // actual party — persisted plans survive content changes).
@@ -959,7 +1264,7 @@ export const useStore = create<Store>()(
               partyMembers: party,
               ...(plan?.entries.length ? { plan } : {}),
               calls: [],
-              partyConsumables: [wCons, pCons, mCons],
+              partyConsumables: partyCons,
               live: true,
               finalized: false,
             },
@@ -1014,12 +1319,14 @@ export const useStore = create<Store>()(
           // Consumption from the FINAL stream (win or lose): passives 1 per char
           // per distinct id; potion charges per char from `heal` events; capped
           // by the shared stock.
+          // Derived from the party that actually fought — `partyConsumables`
+          // is in the same order `assembleParty` resolved it, whether that was
+          // the trinity or a 10-man selection.
           const slots = fight.partyConsumables ?? [];
-          const members = [
-            { id: 'warrior', cons: slots[0] ?? [] },
-            { id: 'priest', cons: slots[1] ?? [] },
-            { id: 'mage', cons: slots[2] ?? [] },
-          ];
+          const members = (fight.party ?? []).map((c, i) => ({
+            id: c.id ?? PLAYER_ID,
+            cons: slots[i] ?? [],
+          }));
           const spent: Inventory = {};
           for (const m of members) {
             const seen = new Set<string>();
@@ -1051,7 +1358,9 @@ export const useStore = create<Store>()(
           let nextFamiliarity = familiarity;
           if (fight.boss) {
             const k = discover(fight.boss, result.events, journal[key]);
-            const names: Record<string, string> = { warrior: 'Borin', priest: 'Seren', mage: 'Elara' };
+            const names: Record<string, string> = Object.fromEntries(
+              (fight.party ?? []).map((c) => [c.id ?? PLAYER_ID, c.name]),
+            );
             let deadName: string | undefined;
             for (const e of result.events) {
               if (e.type === 'death' && names[e.source]) deadName = names[e.source];
@@ -1072,7 +1381,10 @@ export const useStore = create<Store>()(
             };
             nextJournal = { ...journal, [key]: entry };
             nextFamiliarity = { ...familiarity };
-            for (const charId of ['warrior', 'priest', 'mage']) {
+            // Everyone who was in the fight gets the attempt — at raid size
+            // this is the ten who went, which is exactly what makes benching
+            // cost something (§2: a benched character stays unfamiliar).
+            for (const charId of (fight.party ?? []).map((c) => c.id ?? PLAYER_ID)) {
               nextFamiliarity[charId] = {
                 ...(nextFamiliarity[charId] ?? {}),
                 [key]: (nextFamiliarity[charId]?.[key] ?? 0) + 1,
@@ -1081,10 +1393,33 @@ export const useStore = create<Store>()(
           }
 
           // A watched kill unlocks the next encounter.
-          const nextCleared =
-            result.result === 'kill' && encounterId && !get().dungeonCleared[encounterId]
-              ? { ...get().dungeonCleared, [encounterId]: true }
-              : get().dungeonCleared;
+          const firstClear =
+            result.result === 'kill' && encounterId && !get().dungeonCleared[encounterId];
+          const nextCleared = firstClear
+            ? { ...get().dungeonCleared, [encounterId]: true }
+            : get().dungeonCleared;
+
+          // Rewards, both guaranteed rather than rolled — loot rules are an
+          // open GDD question, and deterministic payouts give the tier gate and
+          // the catalyst loop what they need without inventing drop tables.
+          //   · CLEAR_REWARDS: first clear only — a trophy that gates the next
+          //     tier (the forge seal), never farmable.
+          //   · KILL_REWARDS: every kill — the crafting faucet, so the raid
+          //     stays worth re-running (GDD §6).
+          let nextMaterials = get().materials;
+          const killed = result.result === 'kill' && encounterId;
+          const payouts = [
+            firstClear ? CLEAR_REWARDS[encounterId] : undefined,
+            killed ? KILL_REWARDS[encounterId] : undefined,
+          ].filter(Boolean);
+          if (payouts.length > 0) {
+            nextMaterials = { ...nextMaterials };
+            for (const reward of payouts) {
+              for (const [m, n] of Object.entries(reward!)) {
+                nextMaterials[m as keyof Materials] += n;
+              }
+            }
+          }
 
           set({
             fight: { ...fight, finalized: true },
@@ -1093,6 +1428,7 @@ export const useStore = create<Store>()(
             journal: nextJournal,
             familiarity: nextFamiliarity,
             dungeonCleared: nextCleared,
+            materials: nextMaterials,
           });
         },
 
@@ -1127,10 +1463,8 @@ export const useStore = create<Store>()(
         // ---- world loop ----
         view: 'map',
         setView: (v) => set({ view: v }),
-        xp: 0,
-        region: 'heartfield',
         unlocks: { ...DEFAULT_UNLOCKS },
-        materials: { bridgeTimber: 0, sunleaf: 0, emberbloom: 0 },
+        materials: { ...DEFAULT_MATERIALS },
         inventory: {},
         buildings: { ...INITIAL_BUILDINGS },
         upgradeBuilding: (id) =>
@@ -1163,7 +1497,9 @@ export const useStore = create<Store>()(
           inFlightGrind.add(key);
           const req: GrindRequest = {
             zone,
-            charId,
+            // The worker picks a kit factory, so it wants the CLASS -- roster
+            // ids stopped being class names in slice 8.
+            charId: b.classId,
             stance: b.stance,
             behavior: b.behavior,
             gear: b.gear,
@@ -1177,7 +1513,7 @@ export const useStore = create<Store>()(
 
         enqueueTravel: (charId, to) =>
           set((s) => {
-            const cw = s.chars[charId];
+            const cw = charWorld(s, charId);
             if (projectedRegion(cw.queue, cw.region) === to) return {};
             const task: TravelTask = { id: uid(), charId, kind: 'travel', to, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 };
             return { chars: { ...s.chars, [charId]: { ...cw, queue: [...cw.queue, task] } } };
@@ -1188,7 +1524,7 @@ export const useStore = create<Store>()(
           const b = charBuild(s, charId);
           const rate = s.rateCache[rateKey(charId, zone, b.level, b.gear, b.stance, b.behavior, b.talents)];
           if (!rate) return; // card keeps the button disabled until the rate is known
-          const cw = s.chars[charId];
+          const cw = charWorld(s, charId);
           const next = [...cw.queue];
           if (projectedRegion(next, cw.region) !== zone) {
             next.push({ id: uid(), charId, kind: 'travel', to: zone, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 });
@@ -1211,7 +1547,7 @@ export const useStore = create<Store>()(
           set((s) => {
             const meta = REGIONS.find((r) => r.id === zone)?.gather;
             if (!meta) return {};
-            const cw = s.chars[charId];
+            const cw = charWorld(s, charId);
             const next = [...cw.queue];
             if (projectedRegion(next, cw.region) !== zone) {
               next.push({ id: uid(), charId, kind: 'travel', to: zone, durationGameMs: TRAVEL_HOP_GAME_MS, accruedGameMs: 0 });
@@ -1240,7 +1576,7 @@ export const useStore = create<Store>()(
             if (!recipe || count < 1 || !Number.isInteger(count)) return {};
             if ((s.inventory[recipeId] ?? 0) + count > bankCapacity(s.buildings)) return {};
             const materials = { ...s.materials };
-            for (const [herb, per] of Object.entries(recipe.herbs)) {
+            for (const [herb, per] of Object.entries(recipe.cost)) {
               const need = per * count;
               if ((materials[herb as keyof Materials] ?? 0) < need) return {};
               materials[herb as keyof Materials] -= need;
@@ -1257,7 +1593,7 @@ export const useStore = create<Store>()(
               durationGameMs: unitGameMs * count,
               accruedGameMs: 0,
             };
-            const cw = s.chars[charId];
+            const cw = charWorld(s, charId);
             return { materials, chars: { ...s.chars, [charId]: { ...cw, queue: [...cw.queue, craft] } } };
           }),
 
@@ -1265,9 +1601,11 @@ export const useStore = create<Store>()(
           set((s) => {
             // Task ids are unique across the roster, so a plain scan finds the
             // owner — callers don't have to know whose queue it sits in.
-            const owner = WORLD_CHARS.find((c) => s.chars[c].queue.some((task) => task.id === id));
+            const owner = s.rosterOrder.find((c) =>
+              charWorld(s, c).queue.some((task) => task.id === id),
+            );
             if (!owner) return {};
-            const cw = s.chars[owner];
+            const cw = charWorld(s, owner);
             const t = cw.queue.find((task) => task.id === id)!;
             const chars = {
               ...s.chars,
@@ -1282,7 +1620,7 @@ export const useStore = create<Store>()(
               if (recipe && refundUnits > 0) {
                 const cap = bankCapacity(s.buildings);
                 const materials = { ...s.materials };
-                for (const [herb, per] of Object.entries(recipe.herbs)) {
+                for (const [herb, per] of Object.entries(recipe.cost)) {
                   // Refunds clamp at the bank cap (never-confiscate rule);
                   // the excess is lost — rare: needs herbs at cap AND a cancel.
                   const cur = materials[herb as keyof Materials] ?? 0;
@@ -1302,8 +1640,10 @@ export const useStore = create<Store>()(
             const now = Date.now();
             const elapsedGameMs = Math.max(0, (now - s.lastSeenWall) * s.multiplier);
             if (elapsedGameMs <= 0) return { lastSeenWall: now };
-            const { shared, chars } = advanceAll(s, s.chars, elapsedGameMs);
-            return { ...shared, chars, lastSeenWall: now };
+            const { shared, chars } = advanceAll(
+              sharedSlice(s), s.chars, elapsedGameMs, s.rosterOrder,
+            );
+            return { ...applyShared(s, shared), chars, lastSeenWall: now };
           }),
 
         // Reconcile the wall-time the app was closed, once per load, via the
@@ -1319,9 +1659,11 @@ export const useStore = create<Store>()(
             MAX_CATCHUP_GAME_MS,
             Math.max(0, (now - s.lastSeenWall) * s.multiplier),
           );
-          const { shared, chars, events } = advanceAll(s, s.chars, elapsedGameMs);
+          const { shared, chars, events } = advanceAll(
+            sharedSlice(s), s.chars, elapsedGameMs, s.rosterOrder,
+          );
           set({
-            ...shared,
+            ...applyShared(s, shared),
             chars,
             lastSeenWall: now,
             awaySummary: events.length ? { events, elapsedGameMs } : null,
@@ -1339,6 +1681,20 @@ export const useStore = create<Store>()(
             },
           })),
 
+        buildWarcamp: () =>
+          set((s) => {
+            if (s.unlocks.raidAccess) return {};
+            const short = Object.entries(WARCAMP_COST).some(
+              ([m, n]) => (s.materials[m as keyof Materials] ?? 0) < n,
+            );
+            if (short) return {};
+            const materials = { ...s.materials };
+            for (const [m, n] of Object.entries(WARCAMP_COST)) {
+              materials[m as keyof Materials] -= n;
+            }
+            return { unlocks: { ...s.unlocks, raidAccess: true }, materials };
+          }),
+
         buildBridge: () =>
           set((s) => {
             if (s.unlocks.bridgeBuilt || s.materials.bridgeTimber < BRIDGE_COST.bridgeTimber) return {};
@@ -1351,21 +1707,18 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 10,
+      version: 15,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
-        stance: s.stance,
-        behavior: s.behavior,
-        gear: s.gear,
-        talents: s.talents,
-        equippedConsumables: s.equippedConsumables,
+        characters: s.characters,
+        rosterOrder: s.rosterOrder,
         loadouts: s.loadouts,
-        roster: s.roster,
         dungeonCleared: s.dungeonCleared,
+        raidRoster: s.raidRoster,
+        bossLoadouts: s.bossLoadouts,
         journal: s.journal,
         familiarity: s.familiarity,
         plans: s.plans,
-        xp: s.xp,
         unlocks: s.unlocks,
         materials: s.materials,
         inventory: s.inventory,
@@ -1377,15 +1730,22 @@ export const useStore = create<Store>()(
       }),
       migrate: (persisted, version) => {
         const s = persisted as Partial<Store>;
+        // Pre-v11 builds live as loose top-level fields on the raw blob; the
+        // v11 step below folds them into `characters`, so the early steps
+        // write through this view rather than through `Store`.
+        const legacyBuild = persisted as {
+          talents?: string[];
+          equippedConsumables?: string[];
+        };
         if (version < 2) {
-          s.talents = [];
+          legacyBuild.talents = [];
           s.loadouts = [];
         }
         if (version < 3) {
           // Slice 5: professions/consumables join. Backfill herb keys so the
           // reducer's `+=` never sees undefined; old task kinds carry forward.
           s.inventory = {};
-          s.equippedConsumables = [];
+          legacyBuild.equippedConsumables = [];
           s.loadouts = (s.loadouts ?? []).map((l) => ({ ...l, consumables: [] }));
         }
         if (version < 4) {
@@ -1398,18 +1758,12 @@ export const useStore = create<Store>()(
         // (v6, phase 4: roster + dungeon join via the unconditional backfills
         // below; saves that already killed Cinder Maw get the recruits
         // immediately via the attempts-record backfill.)
-        s.materials = { bridgeTimber: 0, sunleaf: 0, emberbloom: 0, ...(s.materials ?? {}) };
+        s.materials = { ...DEFAULT_MATERIALS, ...(s.materials ?? {}) };
         s.buildings = { ...INITIAL_BUILDINGS, ...(s.buildings ?? {}) };
         s.unlocks = { ...DEFAULT_UNLOCKS, ...(s.unlocks ?? {}) };
         if (!s.unlocks.cinderMawKilled && s.attempts?.['cinder-maw']?.best) {
           s.unlocks.cinderMawKilled = true;
         }
-        // (v10, phase-5 slice 6: recruit `talents` join each roster build via
-        // the unconditional backfill below; pre-v10 builds start with [].)
-        s.roster = {
-          warrior: sanitizeRosterBuild(s.roster?.warrior, DEFAULT_ROSTER.warrior, WARRIOR_TALENTS),
-          priest: sanitizeRosterBuild(s.roster?.priest, DEFAULT_ROSTER.priest, PRIEST_TALENTS),
-        };
         s.dungeonCleared = { ...(s.dungeonCleared ?? {}) };
         // (v7, phase-4 slice 4: journal + familiarity join unconditionally.)
         s.journal = { ...(s.journal ?? {}) };
@@ -1417,13 +1771,71 @@ export const useStore = create<Store>()(
         // (v8, phase-4 slice 5: boss plans join unconditionally; entries are
         // sanitized against the real party at pull/sim time, not here.)
         s.plans = { ...(s.plans ?? {}) };
-        // Repair against current content — talent ids may have changed.
-        s.talents = sanitizeTalentSelection(
-          MAGE_TALENTS,
-          s.talents ?? [],
-          talentPointsForLevel(levelForXp(s.xp ?? 0)),
-        );
-        s.equippedConsumables = sanitizeConsumableSelection(s.equippedConsumables ?? []);
+        // (v12, slice 10: `unlocks.raidAccess` and `materials.forgeSeal` join
+        // via the unconditional backfills above — both default to off/0.)
+        // (v14, slice 12: `materials.emberCatalyst` joins the same way.)
+        // ---- v11 (phase-5 slice 8): the uniform `characters` record ---------
+        // Elara's legacy top-level build fields and the `roster` record fold
+        // into one map. The FOUNDERS KEEP THEIR IDS ('mage'/'warrior'/'priest'),
+        // which is the whole reason this migration is safe: every persisted
+        // `plans[].charId`, `familiarity[charId]`, `chars[charId]` and journal
+        // key still resolves, so none of them need remapping.
+        if (!s.characters) {
+          const legacy = persisted as {
+            stance?: StanceConfig;
+            behavior?: Partial<BehaviorOverrides>;
+            gear?: GearSelection;
+            talents?: string[];
+            equippedConsumables?: string[];
+            xp?: number;
+            roster?: Record<string, Partial<CharacterBuild> & { consumables?: string[] }>;
+          };
+          const base = defaultCharacters();
+          s.characters = {
+            mage: sanitizeCharacter(
+              {
+                classId: 'mage',
+                name: FOUNDER_NAMES['mage']!,
+                ...(legacy.stance ? { stance: legacy.stance } : {}),
+                // Only Elara ever had dev-slider values; recruits keep {} so
+                // each class keeps its own behavior base.
+                ...(legacy.behavior ? { behavior: legacy.behavior } : {}),
+                ...(legacy.gear ? { gear: legacy.gear } : {}),
+                ...(legacy.talents ? { talents: legacy.talents } : {}),
+                ...(legacy.equippedConsumables ? { consumables: legacy.equippedConsumables } : {}),
+                xp: legacy.xp ?? 0,
+              },
+              base['mage']!,
+            ),
+            warrior: sanitizeCharacter(
+              { ...legacy.roster?.['warrior'], classId: 'warrior', name: FOUNDER_NAMES['warrior']! },
+              base['warrior']!,
+            ),
+            priest: sanitizeCharacter(
+              { ...legacy.roster?.['priest'], classId: 'priest', name: FOUNDER_NAMES['priest']! },
+              base['priest']!,
+            ),
+          };
+        } else {
+          // Already v11+: repair each build against current content.
+          const base = defaultCharacters();
+          s.characters = Object.fromEntries(
+            Object.entries(s.characters).map(([id, c]) => [
+              id,
+              sanitizeCharacter(c, base[c?.classId ?? 'mage'] ?? base['mage']!),
+            ]),
+          );
+        }
+        s.rosterOrder = (s.rosterOrder ?? [...FOUNDER_CHARS]).filter((id) => s.characters![id]);
+        for (const id of Object.keys(s.characters)) {
+          if (!s.rosterOrder.includes(id)) s.rosterOrder.push(id);
+        }
+        // (v13, slice 11: the raid selection joins.) Repaired against the live
+        // roster and re-sorted into roster order — MUST run after `characters`
+        // exists, or every selection would be filtered away as unknown.
+        s.raidRoster = s.rosterOrder.filter((id) => (s.raidRoster ?? []).includes(id));
+        // (v15, slice 13: per-boss loadout assignments join.)
+        s.bossLoadouts = { ...(s.bossLoadouts ?? {}) };
         s.loadouts = (s.loadouts ?? []).map((l) => ({
           ...l,
           consumables: sanitizeConsumableSelection(l.consumables ?? []),
@@ -1444,9 +1856,9 @@ export const useStore = create<Store>()(
               priest: { region: start, queue: [] },
             };
           }
-          // Repair: every character present, every task owned.
+          // Repair: every roster member has a lane, every task is owned.
           const chars = s.chars;
-          for (const id of WORLD_CHARS) {
+          for (const id of s.rosterOrder ?? FOUNDER_CHARS) {
             const cw = chars[id];
             chars[id] = cw
               ? { region: cw.region ?? 'heartfield', queue: (cw.queue ?? []).map((t) => ({ ...t, charId: id })) }

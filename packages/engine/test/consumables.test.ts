@@ -43,6 +43,29 @@ describe('consumable content', () => {
     }
   });
 
+  it('the raid tier sharpens one axis each, so the slot choice survives', () => {
+    const by = (id: string) => CONSUMABLES_BY_ID[id]!;
+    const draught = by('ember-draught');
+    const tonic = by('cinderguard-tonic');
+    expect(draught.kind).toBe('passive');
+    expect(tonic.kind).toBe('passive');
+    if (draught.kind !== 'passive' || tonic.kind !== 'passive') return;
+
+    const flask = by('flask-of-embers');
+    const ward = by('fire-ward-potion');
+    if (flask.kind !== 'passive' || ward.kind !== 'passive') return;
+
+    // Each raid consumable beats its tier-1 counterpart on ITS axis...
+    expect(draught.bonuses.spellPower!).toBeGreaterThan(flask.bonuses.spellPower!);
+    expect(tonic.bonuses.resistances!['fire']!).toBeGreaterThan(
+      ward.bonuses.resistances!['fire']!,
+    );
+    // ...and on no other, so neither is a strict upgrade over the other and
+    // the ward-vs-flask decision (GDD §6) still has to be made at raid tier.
+    expect(draught.bonuses.resistances?.['fire'] ?? 0).toBe(0);
+    expect(tonic.bonuses.spellPower ?? 0).toBe(0);
+  });
+
   it('normalize merges duplicate actives and dedupes passives', () => {
     const { passives, actives, summary } = normalizeConsumables([POTION, FLASK, POTION, FLASK]);
     expect(passives).toHaveLength(1);

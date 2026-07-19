@@ -7,7 +7,7 @@ import {
   type PlanEntry,
   type PlanTrigger,
 } from '@rpg/engine';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { mmss } from '../fight/replay';
 import { useStore, type JournalEntry } from '../store';
 
@@ -25,18 +25,56 @@ interface ActionOption {
   action: PlanAction;
 }
 
-/** Curated action palette; entries are re-sanitized against the real party at pull time. */
-const ACTION_OPTIONS: ActionOption[] = [
-  { id: 'battle-shout', label: 'Battle Shout (Borin — party burst window)', action: { kind: 'ability', charId: 'warrior', abilityId: 'battle-shout' } },
-  { id: 'shield-wall', label: 'Shield Wall (Borin — tank CD)', action: { kind: 'ability', charId: 'warrior', abilityId: 'shield-wall' } },
-  { id: 'divine-hymn', label: 'Divine Hymn (Seren — heal CD)', action: { kind: 'ability', charId: 'priest', abilityId: 'divine-hymn' } },
-  { id: 'combustion', label: 'Combustion (Elara — burst)', action: { kind: 'ability', charId: 'mage', abilityId: 'combustion' } },
-  { id: 'pyroclasm', label: 'Pyroclasm (Elara — burst, talent)', action: { kind: 'ability', charId: 'mage', abilityId: 'pyroclasm' } },
-  { id: 'mage-cleave', label: 'Elara → Cleave targets', action: { kind: 'stance', charId: 'mage', patch: { targeting: 1 } } },
-  { id: 'mage-focus', label: 'Elara → Focus targets', action: { kind: 'stance', charId: 'mage', patch: { targeting: 0 } } },
-  { id: 'hold', label: 'Stop damage! (whole party holds DPS)', action: { kind: 'holdDps', hold: true } },
-  { id: 'push', label: 'Push! (resume DPS)', action: { kind: 'holdDps', hold: false } },
-];
+/**
+ * The action palette, derived from the party that will actually pull this boss.
+ *
+ * It used to be a hardcoded list keyed on 'warrior'/'priest'/'mage'. At raid
+ * size that silently misbinds: ten members share three class ids, so every
+ * `charId: 'warrior'` entry would resolve to whichever single def happened to
+ * own that id — one tank gets all the plan actions and the other gets none.
+ * Deriving from the party keys each entry on a unique roster id instead.
+ *
+ * Still curated, not a full char × ability matrix (GDD §3 bans list-maintenance
+ * feel): only the tagged cooldowns that are worth planning around, plus the
+ * party-wide levers.
+ */
+const PLANNABLE_TAGS = ['burst', 'heal-cd', 'defensive', 'battle-res'];
+
+function actionOptions(party: PartyLike): ActionOption[] {
+  const opts: ActionOption[] = [];
+  for (const m of party) {
+    const c = m.character;
+    const charId = c.id ?? 'player';
+    for (const ability of c.abilities) {
+      if (!ability.tags.some((t) => PLANNABLE_TAGS.includes(t))) continue;
+      opts.push({
+        id: `${charId}:${ability.id}`,
+        label: `${ability.name} (${c.name} — ${ability.tags[0]})`,
+        action: { kind: 'ability', charId, abilityId: ability.id },
+      });
+    }
+  }
+  // Target switches for the dps, then the party-wide levers.
+  for (const m of party) {
+    const c = m.character;
+    if (c.role !== 'dps') continue;
+    const charId = c.id ?? 'player';
+    opts.push({ id: `${charId}:cleave`, label: `${c.name} → Cleave targets`, action: { kind: 'stance', charId, patch: { targeting: 1 } } });
+    opts.push({ id: `${charId}:focus`, label: `${c.name} → Focus targets`, action: { kind: 'stance', charId, patch: { targeting: 0 } } });
+  }
+  opts.push({ id: 'hold', label: 'Stop damage! (whole party holds DPS)', action: { kind: 'holdDps', hold: true } });
+  opts.push({ id: 'push', label: 'Push! (resume DPS)', action: { kind: 'holdDps', hold: false } });
+  return opts;
+}
+
+type PartyLike = {
+  character: {
+    id?: string;
+    name: string;
+    role?: string;
+    abilities: { id: string; name: string; tags: readonly string[] }[];
+  };
+}[];
 
 interface TriggerOption {
   id: string;
@@ -83,8 +121,8 @@ function describeTrigger(t: PlanTrigger, boss: BossDefinition): string {
   }
 }
 
-function describeAction(a: PlanAction): string {
-  const match = ACTION_OPTIONS.find((o) => JSON.stringify(o.action) === JSON.stringify(a));
+function describeAction(a: PlanAction, options: ActionOption[]): string {
+  const match = options.find((o) => JSON.stringify(o.action) === JSON.stringify(a));
   if (match) return match.label;
   if (a.kind === 'ability') return `${a.charId}: ${a.abilityId}`;
   if (a.kind === 'stance') return `${a.charId}: stance ${JSON.stringify(a.patch)}`;
@@ -92,17 +130,28 @@ function describeAction(a: PlanAction): string {
   return a.hold ? 'Stop damage!' : 'Push!';
 }
 
-export function PlanPanel({ boss, journalEntry }: { boss: BossDefinition; journalEntry: JournalEntry | undefined }) {
+export function PlanPanel({
+  boss,
+  journalEntry,
+  party,
+}: {
+  boss: BossDefinition;
+  journalEntry: JournalEntry | undefined;
+  /** The party that will pull this boss — the palette is derived from its kits. */
+  party: PartyLike;
+}) {
   const plans = useStore((s) => s.plans);
   const setPlan = useStore((s) => s.setPlan);
   const plan: BossPlan = plans[boss.id] ?? { entries: [] };
   const triggers = triggerOptions(boss, journalEntry);
+  const options = useMemo(() => actionOptions(party), [party]);
   const [triggerId, setTriggerId] = useState('pull');
-  const [actionId, setActionId] = useState('battle-shout');
+  const [actionId, setActionId] = useState('');
+  const selectedAction = actionId || options[0]?.id || '';
 
   const add = () => {
     const trigger = triggers.find((t) => t.id === triggerId)?.trigger;
-    const action = ACTION_OPTIONS.find((a) => a.id === actionId)?.action;
+    const action = options.find((a) => a.id === selectedAction)?.action;
     if (!trigger || !action) return;
     const entry: PlanEntry = { trigger, action };
     setPlan(boss.id, { entries: [...plan.entries, entry] });
@@ -117,7 +166,7 @@ export function PlanPanel({ boss, journalEntry }: { boss: BossDefinition; journa
       </div>
       {plan.entries.map((e, i) => (
         <div key={i} className="statline">
-          {describeTrigger(e.trigger, boss)} → {describeAction(e.action)}{' '}
+          {describeTrigger(e.trigger, boss)} → {describeAction(e.action, options)}{' '}
           <button className="btn btn-small" onClick={() => remove(i)}>
             ✕
           </button>
@@ -132,8 +181,8 @@ export function PlanPanel({ boss, journalEntry }: { boss: BossDefinition; journa
               </option>
             ))}
           </select>
-          <select value={actionId} onChange={(e) => setActionId(e.target.value)}>
-            {ACTION_OPTIONS.map((a) => (
+          <select value={selectedAction} onChange={(e) => setActionId(e.target.value)}>
+            {options.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.label}
               </option>

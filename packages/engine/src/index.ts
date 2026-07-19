@@ -88,7 +88,7 @@ export { WARRIOR_TALENTS, WARRIOR_TALENT_BUILDS } from './content/classes/warrio
 export { makePriest, priestBaseForLevel } from './content/classes/priest';
 export { PRIEST_TALENTS, PRIEST_TALENT_BUILDS } from './content/classes/priestTalents';
 export { applyComp, unlockedGroupCds, checkRaidComp, CINDERFORGE_COMP_RULE } from './model/comp';
-export type { CompPassiveDefinition, GroupCdDefinition, RaidCompRule } from './model/comp';
+export type { CompPassiveDefinition, GroupCdDefinition, RaidCompRule, RaidCompReport } from './model/comp';
 export { GROUP_CDS, COMP_PASSIVES } from './content/groupCds';
 export { sanitizePlan } from './model/plan';
 export type { BossPlan, PlanAction, PlanEntry, PlanTrigger, TimedCall } from './model/plan';

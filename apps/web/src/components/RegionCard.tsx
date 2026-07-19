@@ -1,7 +1,7 @@
 import { ZONES } from '@rpg/engine';
 import { useCharBuild, useStore } from '../store';
 import { MATERIAL_LABELS } from '../world/professions';
-import { BRIDGE_COST, rateKey, regionUnlocked, type RegionMeta } from '../world/tasks';
+import { BRIDGE_COST, WARCAMP_COST, rateKey, regionUnlocked, type RegionMeta } from '../world/tasks';
 
 const RISK_CHIP: Record<string, string> = {
   low: 'chip',
@@ -14,7 +14,7 @@ export function RegionCard({ region }: { region: RegionMeta }) {
   // farms with their own kit, so the XP/hr and risk chips are theirs.
   const charId = useStore((s) => s.activeWorldChar);
   const build = useCharBuild(charId);
-  const here = useStore((s) => s.chars[s.activeWorldChar].region);
+  const here = useStore((s) => s.chars[s.activeWorldChar]?.region ?? 'heartfield');
   const unlocks = useStore((s) => s.unlocks);
   const materials = useStore((s) => s.materials);
   const rateCache = useStore((s) => s.rateCache);
@@ -22,6 +22,7 @@ export function RegionCard({ region }: { region: RegionMeta }) {
   const enqueueGrind = useStore((s) => s.enqueueGrind);
   const enqueueGather = useStore((s) => s.enqueueGather);
   const buildBridge = useStore((s) => s.buildBridge);
+  const buildWarcamp = useStore((s) => s.buildWarcamp);
   const pull = useStore((s) => s.pull);
 
   const unlocked = regionUnlocked(region.id, unlocks);
@@ -33,6 +34,15 @@ export function RegionCard({ region }: { region: RegionMeta }) {
   // Bridge (Ashen gate): buildable from anywhere once enough timber is banked.
   const timber = materials.bridgeTimber;
   const canBuildBridge = region.id === 'ashen-foothills' && !unlocks.bridgeBuilt && timber >= BRIDGE_COST.bridgeTimber;
+
+  // Warcamp (Cinder Wastes gate → the Cinderforge raid). Shown only once the
+  // Ember Forge has paid out its seal, so it can't read as an unreachable
+  // teaser before the dungeon is cleared.
+  const showWarcamp =
+    region.id === 'cinder-wastes' && !unlocks.raidAccess && materials.forgeSeal > 0;
+  const warcampShort = Object.entries(WARCAMP_COST).filter(
+    ([m, n]) => (materials[m as keyof typeof materials] ?? 0) < n,
+  );
 
   // A gate boss can be challenged once its home region is reachable, and stays
   // repeatable after the first kill (re-fight for practice/loot):
@@ -94,6 +104,22 @@ export function RegionCard({ region }: { region: RegionMeta }) {
         {region.id === 'ashen-foothills' && !unlocks.bridgeBuilt && (
           <button className="btn btn-small btn-primary" disabled={!canBuildBridge} onClick={buildBridge}>
             Build Bridge ({timber}/{BRIDGE_COST.bridgeTimber} timber)
+          </button>
+        )}
+        {showWarcamp && (
+          <button
+            className="btn btn-small btn-primary"
+            disabled={warcampShort.length > 0}
+            onClick={buildWarcamp}
+            title={`Opens the Cinderforge raid — ${Object.entries(WARCAMP_COST)
+              .map(([m, n]) => `${materials[m as keyof typeof materials] ?? 0}/${n} ${MATERIAL_LABELS[m as keyof typeof materials]}`)
+              .join(', ')}`}
+          >
+            Raise Warcamp
+            {warcampShort.length > 0 &&
+              ` (need ${warcampShort
+                .map(([m, n]) => `${n - (materials[m as keyof typeof materials] ?? 0)} ${MATERIAL_LABELS[m as keyof typeof materials]}`)
+                .join(', ')})`}
           </button>
         )}
       </div>

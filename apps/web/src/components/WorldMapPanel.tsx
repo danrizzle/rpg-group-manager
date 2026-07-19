@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useCharBuild, useStore } from '../store';
+import { DUNGEONS, useCharBuild, useStore } from '../store';
 import { MULTIPLIER_PRESETS, REGIONS, buildHash } from '../world/tasks';
 import { DungeonPanel } from './DungeonPanel';
 import { QueueStrip } from './QueueStrip';
@@ -8,7 +8,7 @@ import { RegionCard } from './RegionCard';
 export function WorldMapPanel() {
   const charId = useStore((s) => s.activeWorldChar);
   const b = useCharBuild(charId);
-  const region = useStore((s) => s.chars[s.activeWorldChar].region);
+  const region = useStore((s) => s.chars[s.activeWorldChar]?.region ?? 'heartfield');
   const multiplier = useStore((s) => s.multiplier);
   const setMultiplier = useStore((s) => s.setMultiplier);
   const requestGrindRates = useStore((s) => s.requestGrindRates);
@@ -51,7 +51,9 @@ export function WorldMapPanel() {
         ))}
       </div>
 
-      <DungeonPanel />
+      {DUNGEONS.map((make, i) => (
+        <DungeonPanel key={i} make={make} />
+      ))}
 
       <p className="muted">Alchemy has moved to your Home Base.</p>
     </section>

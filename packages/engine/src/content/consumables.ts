@@ -40,6 +40,29 @@ export const CONSUMABLES: ConsumableDefinition[] = [
     kind: 'passive',
     bonuses: { resistances: { fire: 30 } },
   },
+
+  // ---- raid tier (phase-5 slice 12) --------------------------------------
+  // Crafted with catalysts from the raid itself (GDD §6's catalyst model: new
+  // tiers are gated on materials from the previous content). They do NOT
+  // dominate the tier-1 three — each is a sharper version of one axis, so the
+  // slot decision stays a decision at raid scale rather than becoming "bring
+  // the two best". Numbers are placeholder balance.
+  {
+    id: 'ember-draught',
+    name: 'Ember Draught',
+    kind: 'passive',
+    // vs Flask of Embers (+15 SP): more throughput, but the catalyst cost
+    // competes with the ward, which is what Vael's raid-wide fire wants.
+    bonuses: { spellPower: 26 },
+  },
+  {
+    id: 'cinderguard-tonic',
+    name: 'Cinderguard Tonic',
+    kind: 'passive',
+    // vs Fire Ward Potion (+30 fire res): the raid answer to Cinder Nova and
+    // Immolation Rite, and it carries a little HP so tanks want it too.
+    bonuses: { resistances: { fire: 55 }, maxHp: 250 },
+  },
 ];
 
 export const CONSUMABLES_BY_ID: Record<string, ConsumableDefinition> = Object.fromEntries(

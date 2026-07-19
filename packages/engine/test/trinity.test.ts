@@ -93,6 +93,28 @@ describe('comp rules', () => {
     expect(unlockedGroupCds(defs, GROUP_CDS).map((cd) => cd.id)).toEqual(['battle-shout']);
   });
 
+  it('the CD carrier is stable under party reordering (id-keyed, not positional)', () => {
+    // Two warriors: the carrier must be the same CHARACTER regardless of the
+    // order the party is assembled in. The old positional rule ("first element
+    // of the class") moved Battle Shout when the roster was reordered, which
+    // silently invalidates persisted plans keyed on charId.
+    const w1 = { ...makeWarrior(), id: 'warrior', name: 'Borin' };
+    const w2 = { ...makeWarrior(), id: 'warrior2', name: 'Kara' };
+    const rest = [
+      { ...makePriest(), id: 'priest' },
+      { ...makeMage(), id: 'mage' },
+    ];
+
+    const carrierOf = (party: Parameters<typeof applyComp>[0]) =>
+      applyComp(party, GROUP_CDS, COMP_PASSIVES)
+        .filter((c) => c.abilities.some((a) => a.id === 'battle-shout'))
+        .map((c) => c.id);
+
+    expect(carrierOf([w1, w2, ...rest])).toEqual(['warrior']);
+    expect(carrierOf([w2, w1, ...rest])).toEqual(['warrior']);
+    expect(carrierOf([...rest, w2, w1])).toEqual(['warrior']);
+  });
+
   it('no warrior, no Battle Shout', () => {
     const defs = applyComp([makePriest(), makeMage()], GROUP_CDS, COMP_PASSIVES);
     expect(defs.every((c) => !c.abilities.some((a) => a.id === 'battle-shout'))).toBe(true);

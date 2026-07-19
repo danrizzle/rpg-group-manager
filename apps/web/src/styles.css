@@ -258,3 +258,46 @@ body {
 .modal h2 { margin: 0 0 6px; color: var(--gold); }
 .away-list { list-style: none; margin: 12px 0 16px; padding: 0; }
 .away-list li { padding: 4px 0; border-bottom: 1px solid var(--panel-edge); color: var(--ink-2); }
+
+/* Roster capacity + recruiting (phase-5 slice 9). */
+.recruit-bar {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+.recruit-bar p { margin: 4px 0 6px; }
+/* The switcher grows with the roster (up to 12), so let it wrap. */
+.roster-switcher { flex-wrap: wrap; }
+
+/* Raid-scale fight frames (phase-5 slice 11): 10 bars in a single column push
+   the combat log off-screen, so group by role and go two-column. */
+.raid-frames { display: flex; flex-direction: column; gap: 6px; }
+.raid-group-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.raid-group-frames {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 8px;
+}
+/* Single column when there isn't room for two. */
+@media (max-width: 900px) {
+  .raid-group-frames { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Raid roster picker. */
+.raid-picker { margin: 6px 0; }
+.raid-picker-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.chip-inline { margin-left: 4px; }
+
+/* Per-boss loadout assignment (phase-5 slice 13). */
+.boss-loadouts { margin: 6px 0; }
+.boss-loadout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 2px 8px;
+}
+.boss-loadout-row { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.boss-loadout-row select { flex: 1; min-width: 0; }

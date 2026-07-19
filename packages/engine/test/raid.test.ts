@@ -40,6 +40,26 @@ describe('raid comp rules', () => {
     expect(res.ok).toBe(false);
     expect(res.reasons.join(' ')).toMatch(/tank|members/);
   });
+
+  it('reports per-requirement progress so a comp builder can show 2/3 healers', () => {
+    const party = raidParty().map((m) => m.character);
+    const oneTank = party.filter((_, i) => i !== 1); // drop a warrior → 9-man, 1 tank
+
+    const full = checkRaidComp(party, CINDERFORGE_COMP_RULE);
+    expect(full.size).toEqual({ have: 10, min: 10, max: 10, ok: true });
+    expect(full.roles).toEqual([
+      { role: 'tank', have: 2, need: 2, ok: true },
+      { role: 'healer', have: 3, need: 3, ok: true },
+    ]);
+
+    const short = checkRaidComp(oneTank, CINDERFORGE_COMP_RULE);
+    expect(short.size).toMatchObject({ have: 9, ok: false });
+    // Only the failing row is flagged — the healer row stays satisfied.
+    expect(short.roles).toEqual([
+      { role: 'tank', have: 1, need: 2, ok: false },
+      { role: 'healer', have: 3, need: 3, ok: true },
+    ]);
+  });
 });
 
 describe('Cinderforge', () => {
