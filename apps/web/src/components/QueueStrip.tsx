@@ -1,7 +1,7 @@
 import { useStore } from '../store';
 import { MATERIAL_LABELS, RECIPES_BY_ID } from '../world/professions';
 import { REGIONS } from '../world/tasks';
-import { WORLD_CHARS, WORLD_CHAR_NAMES, type Task, type WorldCharId } from '../world/types';
+import { type Task, type WorldCharId } from '../world/types';
 
 const regionName = (id: string): string => REGIONS.find((r) => r.id === id)?.name ?? id;
 
@@ -20,7 +20,8 @@ function taskLabel(t: Task): string {
 
 /** One character's lane. Only the head task accrues — that's per queue now. */
 function CharQueue({ charId }: { charId: WorldCharId }) {
-  const cw = useStore((s) => s.chars[charId]);
+  const cw = useStore((s) => s.chars[charId]) ?? { region: 'heartfield', queue: [] };
+  const name = useStore((s) => s.characters[charId]?.name ?? charId);
   const activeWorldChar = useStore((s) => s.activeWorldChar);
   const setActiveWorldChar = useStore((s) => s.setActiveWorldChar);
   const cancelTask = useStore((s) => s.cancelTask);
@@ -32,9 +33,9 @@ function CharQueue({ charId }: { charId: WorldCharId }) {
         <button
           className={`btn btn-small ${acting ? 'btn-active' : ''}`}
           onClick={() => setActiveWorldChar(charId)}
-          title={`Send ${WORLD_CHAR_NAMES[charId]} on the next task you pick`}
+          title={`Send ${name} on the next task you pick`}
         >
-          {WORLD_CHAR_NAMES[charId]}
+          {name}
         </button>
         <span className="muted">
           in {regionName(cw.region)}
@@ -67,7 +68,9 @@ function CharQueue({ charId }: { charId: WorldCharId }) {
  */
 export function QueueStrip() {
   const hasRoster = useStore((s) => s.unlocks.cinderMawKilled);
-  const chars = hasRoster ? WORLD_CHARS : (['mage'] as const);
+  const rosterOrder = useStore((s) => s.rosterOrder);
+  // Before the recruits are earned, only Elara has a lane.
+  const chars = hasRoster ? rosterOrder : ['mage'];
 
   return (
     <div className="queue-strip">

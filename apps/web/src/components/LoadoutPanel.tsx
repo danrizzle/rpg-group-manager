@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useStore } from '../store';
+import type { CharId } from '../world/types';
 
 /**
  * Loadouts (GDD §2): save the whole build — stance, talents, gear and
  * consumable slots — under a name and re-apply it later.
  */
-export function LoadoutPanel() {
+export function LoadoutPanel({ charId }: { charId: CharId }) {
   const loadouts = useStore((s) => s.loadouts);
   const saveLoadout = useStore((s) => s.saveLoadout);
   const applyLoadout = useStore((s) => s.applyLoadout);
@@ -15,7 +16,7 @@ export function LoadoutPanel() {
   const save = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    saveLoadout(trimmed);
+    saveLoadout(charId, trimmed);
     setName('');
   };
 
@@ -46,7 +47,7 @@ export function LoadoutPanel() {
           {loadouts.map((l) => (
             <li key={l.name} className="loadout-row">
               <span className="loadout-name">{l.name}</span>
-              <button className="btn btn-small" onClick={() => applyLoadout(l.name)}>
+              <button className="btn btn-small" onClick={() => applyLoadout(charId, l.name)}>
                 Apply
               </button>
               <button className="btn btn-small" onClick={() => deleteLoadout(l.name)}>

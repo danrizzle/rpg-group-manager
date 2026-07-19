@@ -24,8 +24,23 @@ export interface Unlocks {
   cinderMawKilled: boolean;
 }
 
-/** The two phase-4 recruits; Elara keeps her legacy top-level build fields. */
-export type RosterCharId = 'warrior' | 'priest';
+/** The playable classes. Engine `classId`s — comp rules and kits key on these. */
+export type ClassId = 'mage' | 'warrior' | 'priest';
+
+/**
+ * A roster member's stable identity (slice 8).
+ *
+ * FROZEN CONVENTION: the three founders keep their bare class id (`mage`,
+ * `warrior`, `priest`); every later recruit gets `<classId><n>` with n ≥ 2
+ * (`warrior2`, `priest2`, …), allocated monotonically and never reused.
+ *
+ * Keeping the founders' ids bare is what lets slice 8 migrate the character
+ * model without remapping a single persisted `plans[].charId`,
+ * `familiarity[charId]` or journal key. The engine CLI's `--raid` path uses its
+ * own scheme (`warrior1`/`warrior2`); the two need not agree, since ids are
+ * only ever compared within one party.
+ */
+export type CharId = string;
 
 export interface Materials {
   bridgeTimber: number;
@@ -93,16 +108,23 @@ export type Task = TravelTask | GrindTask | GatherTask | CraftTask;
 /**
  * Characters with a presence in the world (GDD §2 "division of labor", §5
  * task queues): each has their own position and their own queue, and the
- * queues run in PARALLEL. Keyed by the engine class id so it lines up with
- * `familiarity` and `PlanAction.charId` (`RosterCharId` can't be used — it
- * deliberately excludes Elara, who predates the roster record).
+ * queues run in PARALLEL.
+ *
+ * Slice 8: this is now just `CharId` — the roster is a record, its fold order
+ * is the store's explicit `rosterOrder`, and names live on the build. The alias
+ * is kept because task/away-event payloads read better with the intent spelled
+ * out.
  */
-export type WorldCharId = 'mage' | 'warrior' | 'priest';
+export type WorldCharId = CharId;
 
-/** Fixed fold order — keeps the shared-bank capacity clamp deterministic. */
-export const WORLD_CHARS: readonly WorldCharId[] = ['mage', 'warrior', 'priest'];
+/**
+ * The three founders, in the order that predates the roster record. Still the
+ * seed for `rosterOrder` and still the fold order for a pre-slice-8 save; the
+ * live fold order is `rosterOrder`, which grows as recruits arrive.
+ */
+export const FOUNDER_CHARS: readonly CharId[] = ['mage', 'warrior', 'priest'];
 
-export const WORLD_CHAR_NAMES: Record<WorldCharId, string> = {
+export const FOUNDER_NAMES: Record<CharId, string> = {
   mage: 'Elara',
   warrior: 'Borin',
   priest: 'Seren',

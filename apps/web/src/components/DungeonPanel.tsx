@@ -12,7 +12,7 @@ import {
 } from '@rpg/engine';
 import { useMemo } from 'react';
 import { mmss } from '../fight/replay';
-import { ROSTER_CHARS, useStore, type JournalEntry } from '../store';
+import { useRoster, useStore, type JournalEntry } from '../store';
 import { PlanPanel } from './PlanPanel';
 
 const secs = (ms: number) => `${Math.round(ms / 1000)} s`;
@@ -50,13 +50,14 @@ function mechanicLine(def: BossDefinition, key: MechanicKey): string {
 /** Boss journal (GDD §4): ✓ discovered rows, ??? for the rest, wipe line. */
 function JournalCard({ boss, entry }: { boss: BossDefinition; entry: JournalEntry | undefined }) {
   const familiarity = useStore((s) => s.familiarity);
+  const roster = useRoster();
   if (!entry || entry.attempts === 0) {
     return <div className="control-desc">Journal empty — send the group in to learn its tricks.</div>;
   }
   const keys = mechanicsOf(boss);
   const seen = new Set(entry.seen);
   const pct = Math.round(explorationPct(boss, entry) * 100);
-  const famChips = [...ROSTER_CHARS.map((c) => ({ id: c.id, name: c.name })), { id: 'mage', name: 'Elara' }]
+  const famChips = roster
     .map(({ id, name }) => ({ name, bonus: familiarityBonus(familiarity[id]?.[boss.id] ?? 0) }))
     .filter((c) => c.bonus > 0);
   return (
@@ -93,10 +94,11 @@ function JournalCard({ boss, entry }: { boss: BossDefinition; entry: JournalEntr
  * The Ember Forge (phase 4): the locked door in the Cinder Wastes. Encounters
  * unlock linearly (trash gates the first boss, Slagmaw gates Vulkan);
  * attempts — wipes included — feed the boss journal and the roster's
- * familiarity. Pulls run the full trinity: Borin, Seren and Elara.
+ * familiarity. Pulls run the full trinity.
  */
 export function DungeonPanel() {
   const unlocks = useStore((s) => s.unlocks);
+  const roster = useRoster();
   const dungeonCleared = useStore((s) => s.dungeonCleared);
   const attempts = useStore((s) => s.attempts);
   const journal = useStore((s) => s.journal);
@@ -124,11 +126,10 @@ export function DungeonPanel() {
     <div className="panel region-card">
       <div className="region-head">
         <span className="region-name">{dungeon.name}</span>
-        <span className="chip">dungeon · 3-char party</span>
+        <span className="chip">dungeon · {dungeon.partySize.min}-char party</span>
       </div>
       <div className="statline muted">
-        Party: {ROSTER_CHARS.map((c) => c.name).join(', ')} and Elara — build them in the character
-        panel.
+        Party: {roster.map((c) => c.name).join(', ')} — build them in the character panel.
       </div>
       {dungeon.encounters.map((enc, i) => {
         const cleared = Boolean(dungeonCleared[enc.id]);

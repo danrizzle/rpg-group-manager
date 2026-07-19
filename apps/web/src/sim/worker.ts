@@ -38,10 +38,16 @@ import { resolveConsumables } from '../world/professions';
  * The engine is a pure module — it loads in a worker unchanged.
  */
 
+/**
+ * Earned-stat OVERRIDES, layered on the class's own base by the kit factory.
+ * PARTIAL on purpose: the classes ship different bases (damageWhileMoving is
+ * 0.6 mage / 0.8 warrior / 0.5 priest), so sending a filled object would
+ * flatten every class onto the mage's numbers.
+ */
 interface BehaviorInput {
-  discipline: number;
-  aoeEfficiency: number;
-  damageWhileMoving: number;
+  discipline?: number;
+  aoeEfficiency?: number;
+  damageWhileMoving?: number;
 }
 
 export interface RosterBuildInput {
@@ -147,7 +153,7 @@ function buildParty(req: SimRequest): PartyMember[] {
         resolveConsumables(enc.roster.priest.consumables),
       ),
       makeMage(
-        { ...req.behavior, discipline: req.behavior.discipline + fam('mage') },
+        { ...req.behavior, discipline: (req.behavior.discipline ?? 50) + fam('mage') },
         resolveItems(req.gear),
         req.level,
         req.talents,

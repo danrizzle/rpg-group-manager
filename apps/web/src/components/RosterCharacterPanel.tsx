@@ -10,9 +10,9 @@ import {
   type ItemBonuses,
 } from '@rpg/engine';
 import { useMemo } from 'react';
-import { POTION_STEPS, resolveGear, ROSTER_CHARS, STANCES, useStore } from '../store';
+import { CLASSES, MAKERS, POTION_STEPS, resolveGear, STANCES, useCharBuild, useStore } from '../store';
 import { resolveConsumables } from '../world/professions';
-import type { RosterCharId } from '../world/types';
+import type { CharId } from '../world/types';
 import { TalentPanel } from './TalentPanel';
 
 const SLOTS: { slot: GearSlot; label: string }[] = [
@@ -39,22 +39,32 @@ function bonusText(b: ItemBonuses): string {
 }
 
 /**
- * Build panel for a phase-4 recruit (Borin/Seren). Recruits arrive at the
- * cap: every base intent is unlocked; talents/loadouts stay Elara-only in v1.
+ * Build panel for a recruit. Recruits arrive at the cap, so every base intent
+ * is unlocked. Slice 8 made this class-generic (it was a warrior/priest
+ * ternary) — it now works for any class in the registry.
  */
-export function RosterCharacterPanel({ charId }: { charId: RosterCharId }) {
-  const build = useStore((s) => s.roster[charId]);
-  const setRosterStance = useStore((s) => s.setRosterStance);
-  const setRosterGear = useStore((s) => s.setRosterGear);
-  const setRosterConsumableSlot = useStore((s) => s.setRosterConsumableSlot);
+export function RosterCharacterPanel({ charId }: { charId: CharId }) {
+  const build = useCharBuild(charId);
+  const setRosterStance = useStore((s) => s.setStance);
+  const setRosterGear = useStore((s) => s.setGear);
+  const setRosterConsumableSlot = useStore((s) => s.setConsumableSlot);
   const inventory = useStore((s) => s.inventory);
-  const meta = ROSTER_CHARS.find((c) => c.id === charId)!;
+  const cls = CLASSES[build.classId];
+  const meta = { classLabel: cls.label, role: cls.role };
+  const level = build.level;
 
   // Preview at nominal charges (no inventory arg), like Elara's stat line.
-  const def = useMemo(() => {
-    const make = charId === 'warrior' ? makeWarrior : makePriest;
-    return make(undefined, resolveGear(build.gear), 10, build.talents, resolveConsumables(build.consumables));
-  }, [charId, build.gear, build.consumables, build.talents]);
+  const def = useMemo(
+    () =>
+      MAKERS[build.classId](
+        undefined,
+        resolveGear(build.gear),
+        level,
+        build.talents,
+        resolveConsumables(build.consumables),
+      ),
+    [build.classId, build.gear, build.consumables, build.talents, level],
+  );
 
   const activeStance = STANCES.find((st) => st.offense === build.stance.offense);
   const fireRes = def.stats.resistances.fire ?? 0;
@@ -62,7 +72,7 @@ export function RosterCharacterPanel({ charId }: { charId: RosterCharId }) {
   return (
     <>
       <div className="statline">
-        Level 10 · MAX · {meta.classLabel} ({meta.role})
+        Level {level} · MAX · {meta.classLabel} ({meta.role})
       </div>
       <div className="statline">
         {def.stats.maxHp} HP

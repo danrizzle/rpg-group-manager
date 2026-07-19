@@ -14,7 +14,7 @@ export function RegionCard({ region }: { region: RegionMeta }) {
   // farms with their own kit, so the XP/hr and risk chips are theirs.
   const charId = useStore((s) => s.activeWorldChar);
   const build = useCharBuild(charId);
-  const here = useStore((s) => s.chars[s.activeWorldChar].region);
+  const here = useStore((s) => s.chars[s.activeWorldChar]?.region ?? 'heartfield');
   const unlocks = useStore((s) => s.unlocks);
   const materials = useStore((s) => s.materials);
   const rateCache = useStore((s) => s.rateCache);

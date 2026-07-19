@@ -8,7 +8,7 @@ import { RegionCard } from './RegionCard';
 export function WorldMapPanel() {
   const charId = useStore((s) => s.activeWorldChar);
   const b = useCharBuild(charId);
-  const region = useStore((s) => s.chars[s.activeWorldChar].region);
+  const region = useStore((s) => s.chars[s.activeWorldChar]?.region ?? 'heartfield');
   const multiplier = useStore((s) => s.multiplier);
   const setMultiplier = useStore((s) => s.setMultiplier);
   const requestGrindRates = useStore((s) => s.requestGrindRates);

@@ -1,47 +1,33 @@
-import {
-  LEVEL_CAP,
-  MAGE_TALENTS,
-  PRIEST_TALENTS,
-  WARRIOR_TALENTS,
-  talentPointsForLevel,
-  type TalentNode,
-  type TalentTree,
-} from '@rpg/engine';
-import { useStore } from '../store';
-import type { WorldCharId } from '../world/types';
+import { LEVEL_CAP, talentPointsForLevel, type TalentNode } from '@rpg/engine';
+import { CLASSES, useStore } from '../store';
+import type { CharId } from '../world/types';
 import { MATERIAL_LABELS, RESPEC_COST } from '../world/professions';
 
 /**
- * The v1 talent tree (GDD §2): nodes by tier, spend/refund against the
- * cap-granted point pool. Generic over the acting character's class tree —
- * Elara (mage) uses the top-level talent state, recruits use their roster
- * build's talents.
+ * The talent tree (GDD §2): nodes by tier, spend/refund against the
+ * cap-granted point pool. Generic over the character's class tree.
  */
 
+const EMPTY: string[] = [];
 const TIERS = [1, 2, 3] as const;
-const TREE: Record<WorldCharId, TalentTree> = {
-  mage: MAGE_TALENTS,
-  warrior: WARRIOR_TALENTS,
-  priest: PRIEST_TALENTS,
-};
 
-export function TalentPanel({ charId, level }: { charId: WorldCharId; level: number }) {
-  const tree = TREE[charId];
-  const isMage = charId === 'mage';
+/**
+ * Talent tree for any character. Slice 8 dropped the mage-vs-recruit branch:
+ * the tree comes from the class registry and the actions are char-scoped.
+ */
+export function TalentPanel({ charId, level }: { charId: CharId; level: number }) {
+  const classId = useStore((s) => s.characters[charId]?.classId ?? 'mage');
+  const tree = CLASSES[classId].tree;
 
-  const talents = useStore((s) => (isMage ? s.talents : s.roster[charId as 'warrior' | 'priest'].talents));
+  const talents = useStore((s) => s.characters[charId]?.talents) ?? EMPTY;
   const respecStock = useStore((s) => s.materials[RESPEC_COST.material]);
-  const spendMage = useStore((s) => s.spendTalent);
-  const refundMage = useStore((s) => s.refundTalent);
-  const respecMage = useStore((s) => s.respecTalents);
-  const spendRoster = useStore((s) => s.spendRosterTalent);
-  const refundRoster = useStore((s) => s.refundRosterTalent);
-  const respecRoster = useStore((s) => s.respecRosterTalents);
+  const spendTalent = useStore((s) => s.spendTalent);
+  const refundTalent = useStore((s) => s.refundTalent);
+  const respecTalents = useStore((s) => s.respecTalents);
 
-  const roster = charId as 'warrior' | 'priest';
-  const spend = isMage ? spendMage : (id: string) => spendRoster(roster, id);
-  const refund = isMage ? refundMage : (id: string) => refundRoster(roster, id);
-  const respec = isMage ? respecMage : () => respecRoster(roster);
+  const spend = (id: string) => spendTalent(charId, id);
+  const refund = (id: string) => refundTalent(charId, id);
+  const respec = () => respecTalents(charId);
 
   const nodeName = (id: string) => tree.nodes.find((n) => n.id === id)?.name ?? id;
   const pool = talentPointsForLevel(level);

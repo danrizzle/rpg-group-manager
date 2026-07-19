@@ -17,7 +17,17 @@ import {
   type ItemBonuses,
 } from '@rpg/engine';
 import { useMemo } from 'react';
-import { POTION_STEPS, ROSTER_CHARS, resolveGear, STANCES, TARGET_STEPS, useStore } from '../store';
+import {
+  DEFAULT_BEHAVIOR,
+  POTION_STEPS,
+  resolveGear,
+  STANCES,
+  TARGET_STEPS,
+  useCharBuild,
+  useRoster,
+  useStore,
+} from '../store';
+import type { CharId } from '../world/types';
 import { resolveConsumables } from '../world/professions';
 import { LoadoutPanel } from './LoadoutPanel';
 import { RosterCharacterPanel } from './RosterCharacterPanel';
@@ -76,20 +86,26 @@ function DevSlider(props: {
   );
 }
 
-function ElaraPanel() {
-  const stance = useStore((s) => s.stance);
-  const behavior = useStore((s) => s.behavior);
-  const setStance = useStore((s) => s.setStance);
-  const setBehavior = useStore((s) => s.setBehavior);
-  const applyAutoPreset = useStore((s) => s.applyAutoPreset);
-  const gear = useStore((s) => s.gear);
-  const setGear = useStore((s) => s.setGear);
-  const xp = useStore((s) => s.xp);
-  const talents = useStore((s) => s.talents);
-  const equippedConsumables = useStore((s) => s.equippedConsumables);
-  const setConsumableSlot = useStore((s) => s.setConsumableSlot);
+function ElaraPanel({ charId }: { charId: CharId }) {
+  const { stance, behavior, gear, talents, level, consumables: equippedConsumables } =
+    useCharBuild(charId);
+  const setStanceRaw = useStore((s) => s.setStance);
+  const setBehaviorRaw = useStore((s) => s.setBehavior);
+  const applyAutoPresetRaw = useStore((s) => s.applyAutoPreset);
+  const setGearRaw = useStore((s) => s.setGear);
+  const setConsumableSlotRaw = useStore((s) => s.setConsumableSlot);
   const inventory = useStore((s) => s.inventory);
-  const level = levelForXp(xp);
+  // Bind the char-scoped actions once so the JSX below reads as it did before.
+  const setStance = (patch: Parameters<typeof setStanceRaw>[1]) => setStanceRaw(charId, patch);
+  const setBehavior = (patch: Parameters<typeof setBehaviorRaw>[1]) => setBehaviorRaw(charId, patch);
+  const applyAutoPreset = () => applyAutoPresetRaw(charId);
+  const setGear = (slot: Parameters<typeof setGearRaw>[1], itemId: string) =>
+    setGearRaw(charId, slot, itemId);
+  const setConsumableSlot = (slot: number, id: string) => setConsumableSlotRaw(charId, slot, id);
+  const xp = useStore((st) => st.characters[charId]?.xp ?? 0);
+  // The dev sliders need concrete numbers; a character with no override shows
+  // the shared defaults (only Elara has sliders, and she always has values).
+  const bh = { ...DEFAULT_BEHAVIOR, ...behavior };
   // Preview at nominal charges (no inventory arg): the stat line shows what
   // the equipped slots do, independent of current stock.
   const mage = useMemo(
@@ -273,7 +289,7 @@ function ElaraPanel() {
       </p>
       <DevSlider
         label="Discipline"
-        value={behavior.discipline}
+        value={bh.discipline}
         min={0}
         max={100}
         step={5}
@@ -281,12 +297,12 @@ function ElaraPanel() {
         format={(v) => String(v)}
       />
       <div className="statline">
-        reacts in {(reactionTimeMs(behavior.discipline) / 1000).toFixed(1)}s ·{' '}
-        {(mistakeChance(behavior.discipline) * 100).toFixed(1)}% mistake chance per action
+        reacts in {(reactionTimeMs(bh.discipline) / 1000).toFixed(1)}s ·{' '}
+        {(mistakeChance(bh.discipline) * 100).toFixed(1)}% mistake chance per action
       </div>
       <DevSlider
         label="AoE efficiency"
-        value={behavior.aoeEfficiency}
+        value={bh.aoeEfficiency}
         min={0.5}
         max={1.5}
         step={0.05}
@@ -295,7 +311,7 @@ function ElaraPanel() {
       />
       <DevSlider
         label="Damage while moving"
-        value={behavior.damageWhileMoving}
+        value={bh.damageWhileMoving}
         min={0}
         max={1}
         step={0.05}
@@ -323,7 +339,7 @@ function ElaraPanel() {
         </p>
       )}
 
-      <LoadoutPanel />
+      <LoadoutPanel charId={charId} />
     </>
   );
 }
@@ -337,22 +353,20 @@ export function CharacterPanel() {
   const activeChar = useStore((s) => s.activeChar);
   const setActiveChar = useStore((s) => s.setActiveChar);
   const recruited = useStore((s) => s.unlocks.cinderMawKilled);
-  const meta = ROSTER_CHARS.find((c) => c.id === activeChar);
+  const roster = useRoster();
+  const meta = roster.find((c) => c.id === activeChar) ?? roster[0]!;
+  // Elara keeps the full panel (dev sliders, loadouts); recruits get the
+  // build panel. Slice 13 folds the two together.
+  const isElara = meta.classId === 'mage' && meta.id === 'mage';
 
   return (
     <section className="panel">
       {recruited && (
         <div className="segmented" style={{ marginBottom: '0.5rem' }}>
-          <button
-            className={`btn btn-small ${activeChar === 'elara' ? 'btn-active' : ''}`}
-            onClick={() => setActiveChar('elara')}
-          >
-            Elara
-          </button>
-          {ROSTER_CHARS.map((c) => (
+          {roster.map((c) => (
             <button
               key={c.id}
-              className={`btn btn-small ${activeChar === c.id ? 'btn-active' : ''}`}
+              className={`btn btn-small ${meta.id === c.id ? 'btn-active' : ''}`}
               onClick={() => setActiveChar(c.id)}
             >
               {c.name}
@@ -360,15 +374,15 @@ export function CharacterPanel() {
           ))}
         </div>
       )}
-      {meta && recruited ? (
+      {isElara ? (
+        <ElaraPanel charId={meta.id} />
+      ) : (
         <>
           <h2>
             {meta.name} the {meta.classLabel}
           </h2>
           <RosterCharacterPanel charId={meta.id} />
         </>
-      ) : (
-        <ElaraPanel />
       )}
     </section>
   );

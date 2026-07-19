@@ -1,13 +1,13 @@
 import { useStore } from '../store';
 import { MATERIAL_LABELS, RECIPES_BY_ID } from '../world/professions';
 import { REGIONS } from '../world/tasks';
-import { WORLD_CHAR_NAMES, type AwayEvent } from '../world/types';
+import { type AwayEvent } from '../world/types';
 
 const regionName = (id?: string): string => REGIONS.find((r) => r.id === id)?.name ?? id ?? '';
 
 /** "Borin: Gathered 40 timber" — who did what, now that queues run in parallel. */
-function line(e: AwayEvent): string {
-  const who = e.charId ? `${WORLD_CHAR_NAMES[e.charId]}: ` : '';
+function line(e: AwayEvent, names: Record<string, string>): string {
+  const who = e.charId ? `${names[e.charId] ?? e.charId}: ` : '';
   return who + body(e);
 }
 
@@ -36,7 +36,12 @@ const lostNote = (lost?: number): string =>
 export function AwaySummaryModal() {
   const summary = useStore((s) => s.awaySummary);
   const dismiss = useStore((s) => s.dismissAwaySummary);
+  const characters = useStore((s) => s.characters);
   if (!summary) return null;
+
+  const names = Object.fromEntries(
+    Object.entries(characters).map(([id, c]) => [id, c.name]),
+  );
 
   const minutes = Math.round(summary.elapsedGameMs / 60_000);
 
@@ -47,7 +52,7 @@ export function AwaySummaryModal() {
         <p className="muted">{minutes.toLocaleString()} game-minutes elapsed.</p>
         <ul className="away-list">
           {summary.events.map((e, i) => (
-            <li key={i}>{line(e)}</li>
+            <li key={i}>{line(e, names)}</li>
           ))}
         </ul>
         <button className="btn btn-primary" onClick={dismiss}>

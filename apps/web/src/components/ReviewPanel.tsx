@@ -21,25 +21,16 @@ const MISTAKE_LABELS: Record<string, string> = {
 export function ReviewPanel() {
   const sim = useStore((s) => s.sim);
   const runSim = useStore((s) => s.runSim);
-  const stance = useStore((s) => s.stance);
-  const behavior = useStore((s) => s.behavior);
-  const gear = useStore((s) => s.gear);
-  const xp = useStore((s) => s.xp);
-  const talents = useStore((s) => s.talents);
-  const equippedConsumables = useStore((s) => s.equippedConsumables);
   const simTarget = useStore((s) => s.simTarget);
   const setSimTarget = useStore((s) => s.setSimTarget);
   const unlocks = useStore((s) => s.unlocks);
-  const roster = useStore((s) => s.roster);
+  const characters = useStore((s) => s.characters);
   const journal = useStore((s) => s.journal);
   const familiarity = useStore((s) => s.familiarity);
   const plans = useStore((s) => s.plans);
   const stale = simIsStale(
     sim,
-    buildSimRequest(
-      { stance, behavior, gear, xp, talents, equippedConsumables, simTarget, roster, journal, familiarity, plans },
-      0,
-    ),
+    buildSimRequest({ characters, simTarget, journal, familiarity, plans }, 0),
   );
   const r = sim.result;
 
