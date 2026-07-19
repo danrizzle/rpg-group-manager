@@ -13,6 +13,7 @@ import {
   mechanicsOf,
   redactBoss,
 } from '../src/model/journal';
+import { addsMechanic, enrageMechanic, timelineMechanics } from '../src/model/boss';
 import { DEFAULT_STANCE } from '../src/model/stance';
 import { runFight, type PartyMember } from '../src/sim/engine';
 import { runMonteCarlo } from '../src/analysis/montecarlo';
@@ -76,9 +77,9 @@ describe('redactBoss', () => {
   it('an unknown boss redacts to melee + HP only', () => {
     const boss = makeVulkan();
     const dummy = redactBoss(boss, EMPTY_KNOWLEDGE);
-    expect(dummy.timeline).toEqual([]);
-    expect(dummy.addPhase.atHpPct).toBe(0);
-    expect(dummy.enrageAtMs).toBeGreaterThan(600_000);
+    expect(timelineMechanics(dummy)).toEqual([]);
+    expect(addsMechanic(dummy)?.atHpPct).toBe(0);
+    expect(enrageMechanic(dummy)!.atMs).toBeGreaterThan(600_000);
     expect(dummy.hp).toBe(boss.hp);
     expect(dummy.meleeDamage).toBe(boss.meleeDamage);
   });
@@ -87,11 +88,11 @@ describe('redactBoss', () => {
     const boss = makeVulkan();
     const partial = { seen: ['adds', 'timeline:forge-blast'], lowestBossHpPct: 30, attempts: 4 };
     const dummy = redactBoss(boss, partial);
-    expect(dummy.timeline).toEqual(boss.timeline);
-    expect(dummy.addPhase.atHpPct).toBe(boss.addPhase.atHpPct);
+    expect(timelineMechanics(dummy)).toEqual(timelineMechanics(boss));
+    expect(addsMechanic(dummy)?.atHpPct).toBe(addsMechanic(boss)?.atHpPct);
     // Tantrum never seen → it can't fire in the sim.
-    expect(dummy.addPhase.tantrumAfterMs).toBeGreaterThan(600_000);
-    expect(dummy.enrageAtMs).toBeGreaterThan(600_000);
+    expect(addsMechanic(dummy)!.tantrumAfterMs).toBeGreaterThan(600_000);
+    expect(enrageMechanic(dummy)!.atMs).toBeGreaterThan(600_000);
   });
 
   it('full knowledge reproduces the true fight byte-for-byte', () => {

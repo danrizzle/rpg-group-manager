@@ -1,8 +1,12 @@
 import {
+  addsMechanic,
+  enrageMechanic,
   explorationPct,
   familiarityBonus,
   makeEmberForge,
   mechanicsOf,
+  movementMechanics,
+  timelineMechanics,
   type BossDefinition,
   type MechanicKey,
 } from '@rpg/engine';
@@ -16,19 +20,28 @@ const secs = (ms: number) => `${Math.round(ms / 1000)} s`;
 /** Human line for a discovered mechanic — numbers straight from the def. */
 function mechanicLine(def: BossDefinition, key: MechanicKey): string {
   if (key.startsWith('timeline:')) {
-    const t = def.timeline.find((x) => `timeline:${x.id}` === key);
+    const t = timelineMechanics(def).find((x) => `timeline:${x.id}` === key);
     if (!t) return key;
     return `${t.name} — every ${secs(t.everyMs)}, ${t.damage} ${t.damageType} to the whole group`;
   }
+  const mv = movementMechanics(def)[0];
+  const enr = enrageMechanic(def);
+  const adds = addsMechanic(def);
   switch (key) {
     case 'movement':
-      return `Eruptions — every ${secs(def.movementWindows.everyMs)} everyone must move or take ${def.movementWindows.failDamage} ${def.movementWindows.failDamageType}`;
+      return mv
+        ? `Eruptions — every ${secs(mv.everyMs)} everyone must move or take ${mv.failDamage} ${mv.failDamageType}`
+        : key;
     case 'enrage':
-      return `Enrage at ${mmss(def.enrageAtMs)} — damage ×${def.enrageDamageMult}`;
+      return enr ? `Enrage at ${mmss(enr.atMs)} — damage ×${enr.damageMult}` : key;
     case 'adds':
-      return `Phase 2 at ${def.addPhase.atHpPct}% — ${def.addPhase.addsPerWave}× ${def.addPhase.add.name} every ${secs(def.addPhase.waveEveryMs)}`;
+      return adds
+        ? `Phase 2 at ${adds.atHpPct}% — ${adds.addsPerWave}× ${adds.add.name} every ${secs(adds.waveEveryMs)}`
+        : key;
     case 'tantrum':
-      return `Tantrum — an add alive longer than ${secs(def.addPhase.tantrumAfterMs)} enrages the boss (×${def.addPhase.tantrumDamageMult})`;
+      return adds
+        ? `Tantrum — an add alive longer than ${secs(adds.tantrumAfterMs)} enrages the boss (×${adds.tantrumDamageMult})`
+        : key;
     default:
       return key;
   }

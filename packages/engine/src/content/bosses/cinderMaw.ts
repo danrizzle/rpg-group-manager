@@ -17,11 +17,9 @@ export function makeCinderMaw(overrides?: Partial<BossDefinition>): BossDefiniti
     meleeSwingMs: 2200,
     meleeDamageType: 'physical',
 
-    enrageAtMs: 390_000,
-    enrageDamageMult: 8,
-
-    timeline: [
+    mechanics: [
       {
+        kind: 'timeline',
         id: 'firestorm',
         name: 'Firestorm',
         firstAtMs: 45_000,
@@ -29,24 +27,25 @@ export function makeCinderMaw(overrides?: Partial<BossDefinition>): BossDefiniti
         damage: 220,
         damageType: 'fire',
       },
+      {
+        kind: 'movement',
+        firstAtMs: 20_000,
+        everyMs: 30_000,
+        durationMs: 4000,
+        failDamage: 420,
+        failDamageType: 'fire',
+      },
+      { kind: 'enrage', atMs: 390_000, damageMult: 8 },
+      {
+        kind: 'adds',
+        atHpPct: 60,
+        waveEveryMs: 30_000,
+        addsPerWave: 2,
+        add: { name: 'Lavaspawn', hp: 750, meleeDamage: 8, meleeSwingMs: 2000 },
+        tantrumAfterMs: 30_000,
+        tantrumDamageMult: 1.5,
+      },
     ],
-
-    movementWindows: {
-      firstAtMs: 20_000,
-      everyMs: 30_000,
-      durationMs: 4000,
-      failDamage: 420,
-      failDamageType: 'fire',
-    },
-
-    addPhase: {
-      atHpPct: 60,
-      waveEveryMs: 30_000,
-      addsPerWave: 2,
-      add: { name: 'Lavaspawn', hp: 750, meleeDamage: 8, meleeSwingMs: 2000 },
-      tantrumAfterMs: 30_000,
-      tantrumDamageMult: 1.5,
-    },
 
     timerJitterPct: 0.1,
     ...overrides,

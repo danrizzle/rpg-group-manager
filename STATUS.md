@@ -5,12 +5,14 @@
 **Phase 4 (Group content) COMPLETE — all 6 slices done (party sim, trinity +
 Ember Forge, roster/dungeon web, boss journal, boss plans, live calls).**
 Phase 5 (roster & raids) is under way on a **7-slice plan**: slices 1
-(per-character task queues) and 2 (raid-scale party, engine) have **landed** —
-`MAX_PARTY_SIZE` is now a hard 10 and the four size cliffs (group-heal breadth,
-healer threat, movement fire, healer-AI dilution) are fixed, all byte-identical
-below raid scale. Next is slice 3 (mechanics-as-a-list refactor + boss-applied
-debuffs). The remaining raid-side design questions (slot schedule, lockouts,
-loot) are still open and bind from there on. As of July 2026.
+(per-character task queues), 2 (raid-scale party) and 3 (boss mechanics as a
+list + boss-applied debuffs + cast windows) have **landed** — `MAX_PARTY_SIZE`
+is a hard 10 with the four size cliffs fixed, and `BossDefinition` is now a
+`mechanics: Mechanic[]` list (all 5 bosses byte-identical) that can carry the
+tank-swap debuffs and interruptible casts raid content needs. Next is slice 4
+(type-4 machinery: stacking debuffs, taunt, dispel, interrupt). The remaining
+raid-side design questions (slot schedule, lockouts, loot) are still open and
+bind from there on. As of July 2026.
 
 ## Phase checklist
 
@@ -450,23 +452,40 @@ loot) are still open and bind from there on. As of July 2026.
         3 encounters) diff-identical before/after; Ember Forge holds its Law-2
         numbers (Slagmaw 97.5%, Vulkan 96.25% at `--n 400`). Web untouched
         (typecheck + build clean). Balance below.
-  - [ ] **Slice 3 — Mechanics as a list + boss-applied debuffs + enemy cast
-        windows (engine).** `BossDefinition` is today a flat record of
-        singleton mandatory fields (one `movementWindows`, one `addPhase` —
-        Slagmaw disables adds with `atHpPct: 0`), and `installBoss` is a
-        hardcoded function, not a registry. Refactor to
-        `mechanics: Mechanic[]` (discriminated union) with types 1–3
-        re-expressed as data and **all three existing bosses byte-identical**;
-        update the `redactBoss` journal-redaction path + `sim/bosses.ts`.
-        Add the missing boss→player path: `TimedBossAbility` gains an optional
-        `applies: BuffEffect` + target mode (`current-tank`/`random`/`all`) —
-        today `bossScript` can't touch `Actor.applyBuff` at all (the tantrum
-        "buff" is a cosmetic event with the real effect in a closure). Add
-        enemy **cast windows** (`castStart` + a real cast duration; today the
-        boss emits a bare `castEnd` with nothing to interrupt) — the
-        prerequisite for interrupts, deferred here from phase 4. Doing this
-        refactor BEFORE authoring tier-2 content is the whole point of the
-        slice ordering.
+  - [x] **Slice 3 — Mechanics as a list + boss-applied debuffs + enemy cast
+        windows (engine + minimal web). ← LANDED.** `BossDefinition`'s four
+        singleton slots (one `timeline`, one `movementWindows`, one `addPhase`,
+        enrage) → **`mechanics: Mechanic[]`** (discriminated union: `enrage` /
+        `timeline` / `movement` / `adds`), any count of each — raid bosses need
+        multiple windows/phases. **Landed:**
+        1. `installBoss` walks the list grouped by kind in a FIXED order
+           (melee → timeline[] → movement[] → enrage → adds), so the
+           `fork('boss')` jitter draws land in exactly the pre-list order → all
+           **5 bosses byte-identical** (proven: 11 `--json` baselines + full
+           trinity streams across 5 seeds diff-identical; Ember Forge holds
+           Slagmaw 97.5% / Vulkan 96.25%). `mechanicsOf`/`discover`/`redactBoss`
+           rewritten over the list, **same persisted key strings** (`timeline:<id>`,
+           `movement`, `enrage`, `adds`, `tantrum`); accessors
+           (`timelineMechanics`/`movementMechanics`/`enrageMechanic`/`addsMechanic`,
+           + `withEnrageAt` tuning helper) are the one place that walks the union.
+        2. **Boss-applied debuffs** (`TimelineMechanic.applies?: BossDebuff` with
+           `target: current-tank|random|all`): new `Fight.applyBossDebuff`
+           mirrors the character buff branch but boss-sourced
+           (`buffApplied`/`buffExpired`, source `BOSS_ID`); `damageTakenMult`
+           feeds `takeDamage` — the tank-swap lever (stacking is slice 4).
+           Absent = no events, no draws.
+        3. **Cast windows** (`TimelineMechanic.castDurationMs?`): `castStart` →
+           wait → `castEnd` + effect; `noteBossCast` stays at the resolution
+           site so `bossCast` plan triggers fire unchanged. Absent = instant, no
+           `castStart` (byte-identical).
+        **Web:** the 4 components that read flat boss fields
+        (`DungeonPanel`/`PlanPanel`/`replay`/`FightView`) swapped direct reads
+        for the accessors — mechanical, no behavior change (typecheck + build
+        clean). **8 new tests** (cast window emit + timing; bossCast fires at
+        resolution; debuff current-tank/all/absent; ≥2 timelines / ≥2 movement
+        windows) → **140 green**. Verified end-to-end via a raid-style boss (a
+        2.5 s Searing Brand cast applying a ×2 `damageTakenMult` to the current
+        tank, recurring). Design decisions below.
   - [ ] **Slice 4 — Type-4 machinery: stacking debuffs, taunt, dispel,
         interrupt (engine).** GDD §4 type 4 = tank-swap debuffs (hard comp
         requirement: 2 tanks), mandatory dispels, absorb shields — raid only.
@@ -619,6 +638,45 @@ loot) are still open and bind from there on. As of July 2026.
   purely to confirm the mechanics (tanks hold ~5× the party's damage-taken vs
   3 healers; group heal bounded). Rejected: authoring a placeholder raid boss
   now (content belongs in slice 7 after the mechanics list refactor).
+
+**Slice 3 (mechanics as a list + debuffs + cast windows):**
+
+- **`installBoss` processes mechanics grouped by kind, not in list order.**
+  The `fork('boss')` RNG draws (timeline `firstAtMs` jitters, then movement
+  `firstAtMs`) are position-sensitive: any reordering shifts every later draw
+  and breaks byte-identity. Grouping by kind in the fixed melee→timeline→
+  movement→enrage→adds order reproduces the pre-list draw sequence regardless
+  of how a boss author orders its mechanics array. Rejected: iterating the
+  array in author order (byte-identity would depend on every content literal's
+  ordering — a silent trap).
+- **Unseen mechanics are DROPPED (timeline) or NO-OP'd (movement/enrage/adds)
+  in `redactBoss`, not uniformly dropped.** The old redaction kept singleton
+  slots present as no-ops, which the dummy sim relied on (a no-op movement
+  still draws its install jitter). Keeping that shape for movement/enrage/adds
+  means full knowledge reproduces the true fight byte-for-byte (the guard
+  test) and partial knowledge matches the old dummy-sim structure; timelines
+  were always an array and are still filtered out. Rejected: dropping all
+  unseen mechanics (would change the dummy-sim RNG shape vs. the shipped
+  behavior).
+- **Cast windows keep `noteBossCast` at the resolution site.** A `bossCast`
+  plan trigger must fire when the cast *lands* (its observable moment), not at
+  `castStart`; moving the hook would shift every bossCast-driven plan (e.g.
+  Vulkan's hold-DPS resume) and break its byte-identity. Cast duration is
+  opt-in per timeline ability, so plain bosses emit no `castStart` at all.
+- **Boss debuffs reuse `Actor.applyBuff` via a new `Fight.applyBossDebuff`,
+  not a new buff system.** `applyBuff` is already actor-agnostic; the only gap
+  was a boss-sourced entry point emitting `buffApplied`/`buffExpired` with
+  source `BOSS_ID` and a target mode the `BuffEffect` union doesn't express
+  (`current-tank`/`random`/`all`). Stacking stays out (slice 4 adds
+  `ActiveBuff.stacks`); v1 debuffs refresh, which is enough for the tank-swap
+  lever. Rejected: folding boss targeting into `BuffEffect.target` (conflates
+  the character self/party modes with enemy→player modes).
+- **The list refactor necessarily touched the web** (journal/plan/replay/
+  FightView read the flat fields), so slice 3 is engine + a mechanical web
+  migration to the engine accessors — chosen over keeping the flat fields as
+  derived getters (getters don't survive the `...def` spreads in `redactBoss`/
+  `makeX`) or a two-representation hybrid. The mechanic-key strings are a
+  persisted (v7) contract and were preserved exactly.
 
 ## Phase 5 — open design questions (GDD gaps to resolve before the raid slices)
 

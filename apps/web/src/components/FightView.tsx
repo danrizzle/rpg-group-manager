@@ -1,4 +1,4 @@
-import { CONSUMABLES_BY_ID, PLAYER_ID, type PlanAction, type PotionNote } from '@rpg/engine';
+import { CONSUMABLES_BY_ID, enrageMechanic, PLAYER_ID, type PlanAction, type PotionNote } from '@rpg/engine';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildLog, mmss, Replay, type ActorView } from '../fight/replay';
 import { useStore, type AttemptSummary, type FightState } from '../store';
@@ -308,7 +308,7 @@ export function FightView() {
   const boss = fight.boss ? enemies.find((a) => a.id === 'boss') : undefined;
   const otherEnemies = enemies.filter((a) => a !== boss && (a.alive || a.hp > 0));
   const livingOthers = enemies.filter((a) => a !== boss && a.alive);
-  const enrageIn = fight.boss ? fight.boss.enrageAtMs - playT : 0;
+  const enrageIn = fight.boss ? (enrageMechanic(fight.boss)?.atMs ?? 0) - playT : 0;
 
   // Live pulls (party): the scrubber and call palette are locked to the
   // frontier until the fight resolves once; then it's a normal replay.

@@ -6,6 +6,7 @@ import { makeEmberForge, makeSlagmaw, makeVulkan } from '../src/content/dungeons
 import { makeMage } from '../src/content/classes/mage';
 import { makePriest, priestBaseForLevel } from '../src/content/classes/priest';
 import { makeWarrior, warriorBaseForLevel } from '../src/content/classes/warrior';
+import { addsMechanic } from '../src/model/boss';
 import { applyComp, unlockedGroupCds } from '../src/model/comp';
 import { encounterById } from '../src/model/dungeon';
 import { DEFAULT_STANCE } from '../src/model/stance';
@@ -67,11 +68,10 @@ describe('trinity content integrity', () => {
     expect(d.encounters.map((e) => e.id)).toEqual(['forge-whelps', 'slagmaw', 'vulkan']);
     expect(encounterById(d, 'slagmaw')?.kind).toBe('boss');
     expect(d.partySize.min).toBe(3);
-    // Type 4 (tank swaps/dispels) must not exist yet — the model has no slot
-    // for it, so its absence is structural; assert the type-3 add phase is
-    // only on Vulkan.
-    expect(makeSlagmaw().addPhase.atHpPct).toBe(0);
-    expect(makeVulkan().addPhase.atHpPct).toBeGreaterThan(0);
+    // The type-3 add phase is only on Vulkan (Slagmaw disables it with
+    // atHpPct 0); Ember Forge content carries no type-4 debuffs yet.
+    expect(addsMechanic(makeSlagmaw())?.atHpPct).toBe(0);
+    expect(addsMechanic(makeVulkan())?.atHpPct ?? 0).toBeGreaterThan(0);
   });
 
   it('consumables fold into warrior/priest like any stat layer', () => {

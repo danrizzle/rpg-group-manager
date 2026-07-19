@@ -30,7 +30,7 @@ import { ZONES } from '../src/content/mobs/zones';
 import { GEAR_SETS } from '../src/content/items';
 import { CONSUMABLES_BY_ID } from '../src/content/consumables';
 import { packBandMax } from '../src/model/mobPack';
-import type { BossDefinition } from '../src/model/boss';
+import { enrageMechanic, withEnrageAt, type BossDefinition } from '../src/model/boss';
 import { DEFAULT_STANCE } from '../src/model/stance';
 import { runFight } from '../src/sim/engine';
 import { formatEvents } from '../src/analysis/metrics';
@@ -45,6 +45,15 @@ function arg(name: string, fallback: number): number {
   return v;
 }
 const flag = (name: string): boolean => process.argv.includes(`--${name}`);
+
+/** Apply the shared --hp / --enrage tuning overrides to a fresh boss def. */
+function tuneBoss(boss: BossDefinition): BossDefinition {
+  const hp = arg('hp', 0);
+  const enrageSec = arg('enrage', 0);
+  let tuned = hp > 0 ? { ...boss, hp } : boss;
+  if (enrageSec > 0) tuned = withEnrageAt(tuned, enrageSec * 1000);
+  return tuned;
+}
 
 function strArg(name: string, fallback: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -174,14 +183,7 @@ if (encounterName) {
     COMP_PASSIVES,
   );
   const party = defs.map((character) => ({ character, stance: { ...stance } }));
-  const boss =
-    enc.kind === 'boss'
-      ? {
-          ...enc.boss,
-          ...(arg('hp', 0) > 0 ? { hp: arg('hp', 0) } : {}),
-          ...(arg('enrage', 0) > 0 ? { enrageAtMs: arg('enrage', 0) * 1000 } : {}),
-        }
-      : undefined;
+  const boss = enc.kind === 'boss' ? tuneBoss(enc.boss) : undefined;
   const psetup = enc.kind === 'boss' ? { party, boss: boss! } : { party, pack: enc.pack };
 
   const started = performance.now();
@@ -302,10 +304,7 @@ if (flag('raid')) {
   const party = defs.map((character) => ({ character, stance: { ...stance } }));
   const makeRaidBoss = BOSSES[bossName];
   if (!makeRaidBoss) throw new Error(`unknown boss '${bossName}' (${Object.keys(BOSSES).join('/')})`);
-  const boss = makeRaidBoss({
-    ...(arg('hp', 0) > 0 ? { hp: arg('hp', 0) } : {}),
-    ...(arg('enrage', 0) > 0 ? { enrageAtMs: arg('enrage', 0) * 1000 } : {}),
-  });
+  const boss = tuneBoss(makeRaidBoss());
 
   const started = performance.now();
   const result = runMonteCarlo({ party, boss }, n, seed);
@@ -337,7 +336,7 @@ if (flag('raid')) {
 
   console.log(`\n${boss.name} — raid 2t/3h/5d (10), ${n} runs, seed ${seed} (${(elapsed / 1000).toFixed(1)}s)`);
   console.log(
-    `  party gear ${tier}  discipline ${pdisc}  consumables ${pcons.length ? pcons.map((c) => c.id).join(',') : 'none'}  hp ${boss.hp}  enrage ${mmss(boss.enrageAtMs)}`,
+    `  party gear ${tier}  discipline ${pdisc}  consumables ${pcons.length ? pcons.map((c) => c.id).join(',') : 'none'}  hp ${boss.hp}  enrage ${mmss(enrageMechanic(boss)?.atMs ?? 0)}`,
   );
   console.log(`\n  Kill rate:      ${pct(result.killRate)}`);
   for (const [kind, count] of sortDesc(result.lossBreakdown as Record<string, number>)) {
@@ -371,10 +370,7 @@ if (!makeBoss) throw new Error(`unknown boss '${bossName}' (${Object.keys(BOSSES
 
 const setup = {
   player,
-  boss: makeBoss({
-    ...(arg('hp', 0) > 0 ? { hp: arg('hp', 0) } : {}),
-    ...(arg('enrage', 0) > 0 ? { enrageAtMs: arg('enrage', 0) * 1000 } : {}),
-  }),
+  boss: tuneBoss(makeBoss()),
   stance,
 };
 

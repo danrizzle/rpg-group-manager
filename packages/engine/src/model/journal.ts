@@ -1,4 +1,11 @@
-import type { BossDefinition } from './boss';
+import {
+  addsMechanic,
+  enrageMechanic,
+  movementMechanics,
+  timelineMechanics,
+  type BossDefinition,
+  type Mechanic,
+} from './boss';
 import type { CombatEvent } from '../core/events';
 import { BOSS_ID } from '../sim/engine';
 
@@ -34,14 +41,16 @@ export const EMPTY_KNOWLEDGE: BossKnowledge = { seen: [], lowestBossHpPct: 100, 
  * slots (never-firing windows, atHpPct 0) don't count either.
  */
 export function mechanicsOf(def: BossDefinition): MechanicKey[] {
-  const keys: MechanicKey[] = def.timeline.map((t) => `timeline:${t.id}`);
-  if (def.movementWindows.firstAtMs < MAX_FIGHT_MS && def.movementWindows.durationMs > 0) {
+  const keys: MechanicKey[] = timelineMechanics(def).map((t) => `timeline:${t.id}`);
+  if (movementMechanics(def).some((w) => w.firstAtMs < MAX_FIGHT_MS && w.durationMs > 0)) {
     keys.push('movement');
   }
-  if (def.enrageAtMs < MAX_FIGHT_MS) keys.push('enrage');
-  if (def.addPhase.atHpPct > 0) {
+  const enrage = enrageMechanic(def);
+  if (enrage && enrage.atMs < MAX_FIGHT_MS) keys.push('enrage');
+  const adds = addsMechanic(def);
+  if (adds && adds.atHpPct > 0) {
     keys.push('adds');
-    if (def.addPhase.tantrumAfterMs < MAX_FIGHT_MS) keys.push('tantrum');
+    if (adds.tantrumAfterMs < MAX_FIGHT_MS) keys.push('tantrum');
   }
   return keys;
 }
@@ -104,20 +113,35 @@ export function explorationPct(def: BossDefinition, knowledge: BossKnowledge): n
  */
 export function redactBoss(def: BossDefinition, knowledge: BossKnowledge): BossDefinition {
   const seen = new Set(knowledge.seen);
-  return {
-    ...def,
-    timeline: def.timeline.filter((t) => seen.has(`timeline:${t.id}`)),
-    movementWindows: seen.has('movement')
-      ? def.movementWindows
-      : { firstAtMs: NEVER_MS, everyMs: NEVER_MS, durationMs: 0, failDamage: 0, failDamageType: 'physical' },
-    enrageAtMs: seen.has('enrage') ? def.enrageAtMs : NEVER_MS,
-    addPhase: seen.has('adds')
-      ? {
-          ...def.addPhase,
-          tantrumAfterMs: seen.has('tantrum') ? def.addPhase.tantrumAfterMs : NEVER_MS,
-        }
-      : { ...def.addPhase, atHpPct: 0 },
-  };
+  const mechanics: Mechanic[] = [];
+  for (const m of def.mechanics) {
+    switch (m.kind) {
+      case 'timeline':
+        // Unseen timeline abilities are dropped entirely (nothing to simulate).
+        if (seen.has(`timeline:${m.id}`)) mechanics.push(m);
+        break;
+      case 'movement':
+        // Unseen slots are kept but no-op'd (never fire) so the dummy sim's
+        // scheduling/RNG shape matches the real fight's known portion.
+        mechanics.push(
+          seen.has('movement')
+            ? m
+            : { kind: 'movement', firstAtMs: NEVER_MS, everyMs: NEVER_MS, durationMs: 0, failDamage: 0, failDamageType: m.failDamageType },
+        );
+        break;
+      case 'enrage':
+        mechanics.push(seen.has('enrage') ? m : { kind: 'enrage', atMs: NEVER_MS, damageMult: m.damageMult });
+        break;
+      case 'adds':
+        mechanics.push(
+          seen.has('adds')
+            ? { ...m, tantrumAfterMs: seen.has('tantrum') ? m.tantrumAfterMs : NEVER_MS }
+            : { ...m, atHpPct: 0 },
+        );
+        break;
+    }
+  }
+  return { ...def, mechanics };
 }
 
 /**

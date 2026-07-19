@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeCinderMaw } from '../src/content/bosses/cinderMaw';
 import { makeSlagmaw } from '../src/content/dungeons/emberForge';
+import { withEnrageAt } from '../src/model/boss';
 import { makeHeartfieldPack } from '../src/content/mobs/zones';
 import { makeMage } from '../src/content/classes/mage';
 import { makeWarrior } from '../src/content/classes/warrior';
@@ -302,7 +303,7 @@ describe('raid-scale party (10-man)', () => {
   });
 
   it('the bounded group heal lands on at most maxTargets (5), and binds at 10', () => {
-    const r = runFight({ party: realRaid(), boss: makeSlagmaw({ hp: 250_000, enrageAtMs: 10_000_000 }), seed: 5 });
+    const r = runFight({ party: realRaid(), boss: withEnrageAt(makeSlagmaw({ hp: 250_000 }), 10_000_000), seed: 5 });
     // (source, abilityId, t) identifies one cast; count its heal targets.
     const perCast = new Map<string, number>();
     for (const e of r.events) {
@@ -328,17 +329,9 @@ describe('raid-scale party (10-man)', () => {
       hp: 50_000_000,
       meleeDamage: 5,
       meleeSwingMs: 2000,
-      enrageAtMs: 10_000_000,
-      timeline: [],
-      movementWindows: { firstAtMs: 10_000_000, everyMs: 10_000_000, durationMs: 0, failDamage: 0, failDamageType: 'fire' },
-      addPhase: {
-        atHpPct: 0,
-        waveEveryMs: 10_000_000,
-        addsPerWave: 0,
-        add: { name: 'x', hp: 1, meleeDamage: 0, meleeSwingMs: 10_000_000 },
-        tantrumAfterMs: 10_000_000,
-        tantrumDamageMult: 1,
-      },
+      // Only a far-off enrage: no timeline/movement/adds, so the observed mage
+      // is never hurt and its actions come only from its own fork.
+      mechanics: [{ kind: 'enrage', atMs: 10_000_000, damageMult: 8 }],
     });
     // A 9-member base so base + the appended extra is a legal 10-man.
     const base: PartyMember[] = [
@@ -369,24 +362,18 @@ describe('raid-scale party (10-man)', () => {
       makeCinderMaw({
         hp: 50_000_000,
         meleeDamage: 0,
-        enrageAtMs: 10_000_000,
-        timeline: [],
-        movementWindows: {
-          firstAtMs: 2000,
-          everyMs: 10_000_000,
-          durationMs: 1000,
-          failDamage: 100,
-          failDamageType: 'fire',
-          ...(maxSafeFails !== undefined ? { maxSafeFails } : {}),
-        },
-        addPhase: {
-          atHpPct: 0,
-          waveEveryMs: 10_000_000,
-          addsPerWave: 0,
-          add: { name: 'x', hp: 1, meleeDamage: 0, meleeSwingMs: 10_000_000 },
-          tantrumAfterMs: 10_000_000,
-          tantrumDamageMult: 1,
-        },
+        mechanics: [
+          {
+            kind: 'movement',
+            firstAtMs: 2000,
+            everyMs: 10_000_000,
+            durationMs: 1000,
+            failDamage: 100,
+            failDamageType: 'fire',
+            ...(maxSafeFails !== undefined ? { maxSafeFails } : {}),
+          },
+          { kind: 'enrage', atMs: 10_000_000, damageMult: 8 },
+        ],
       });
     const failsIn = (maxSafeFails: number | undefined, seed: number): number => {
       const r = runFight({ party: clumsy(), boss: bossWith(maxSafeFails), seed });

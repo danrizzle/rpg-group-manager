@@ -7,7 +7,24 @@ export { GCD_MS } from './model/ability';
 export type { Ability, AbilityEffect, AbilityTag } from './model/ability';
 export { DEFAULT_STANCE, validateStance } from './model/stance';
 export type { StanceConfig } from './model/stance';
-export type { AddDefinition, BossDefinition, TimedBossAbility } from './model/boss';
+export type {
+  AddDefinition,
+  BossDefinition,
+  BossDebuff,
+  BossDebuffTarget,
+  Mechanic,
+  EnrageMechanic,
+  TimelineMechanic,
+  MovementMechanic,
+  AddsMechanic,
+} from './model/boss';
+export {
+  timelineMechanics,
+  movementMechanics,
+  enrageMechanic,
+  addsMechanic,
+  withEnrageAt,
+} from './model/boss';
 export type { MobDefinition, MobPackDefinition } from './model/mobPack';
 export { packBandMax } from './model/mobPack';
 export { runFight, PLAYER_ID, BOSS_ID, MAX_PARTY_SIZE, enemyStats } from './sim/engine';

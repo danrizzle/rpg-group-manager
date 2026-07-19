@@ -1,9 +1,9 @@
 import { EventLog, type CombatEvent } from '../core/events';
 import { Rng } from '../core/rng';
 import { Scheduler } from '../core/scheduler';
-import { GCD_MS, type Ability, type GroupHealTarget } from '../model/ability';
+import { GCD_MS, type Ability, type BuffEffect, type GroupHealTarget } from '../model/ability';
 import { Actor } from '../model/actor';
-import type { BossDefinition } from '../model/boss';
+import { addsMechanic, type BossDebuff, type BossDebuffTarget, type BossDefinition } from '../model/boss';
 import type { MobDefinition, MobPackDefinition } from '../model/mobPack';
 import type { EquippedConsumable } from '../model/consumable';
 import type { BossPlan, TimedCall } from '../model/plan';
@@ -361,6 +361,56 @@ export class Fight {
     return top;
   }
 
+  /**
+   * A boss timeline cast applies a debuff to characters (GDD §4 type 4 — the
+   * tank-swap / dispel lever). Mirrors the character buff branch but is
+   * boss-sourced (`buffApplied`/`buffExpired` with source BOSS_ID). Only
+   * invoked when a mechanic sets `applies`, so plain bosses draw/emit nothing.
+   */
+  applyBossDebuff(debuff: BossDebuff, sourceAbilityId: string, rng: Rng): void {
+    const now = this.scheduler.now;
+    const effect: BuffEffect = {
+      kind: 'buff',
+      buffId: debuff.buffId,
+      durationMs: debuff.durationMs,
+      ...(debuff.damageMult !== undefined ? { damageMult: debuff.damageMult } : {}),
+      ...(debuff.critBonus !== undefined ? { critBonus: debuff.critBonus } : {}),
+      ...(debuff.damageTakenMult !== undefined ? { damageTakenMult: debuff.damageTakenMult } : {}),
+      ...(debuff.absorb !== undefined ? { absorb: debuff.absorb } : {}),
+    };
+    for (const target of this.debuffTargets(debuff.target, rng)) {
+      if (!target.actor.alive) continue;
+      target.actor.applyBuff(effect, now);
+      this.emit({
+        type: 'buffApplied',
+        source: BOSS_ID,
+        target: target.actor.id,
+        meta: { buffId: debuff.buffId, abilityId: sourceAbilityId },
+      });
+      this.scheduler.in(debuff.durationMs, () => {
+        for (const buffId of target.actor.expireBuffs(this.scheduler.now)) {
+          this.emit({
+            type: 'buffExpired',
+            source: target.actor.id,
+            target: target.actor.id,
+            meta: { buffId },
+          });
+        }
+      });
+    }
+  }
+
+  /** Resolve a boss-debuff target mode to the affected characters. */
+  private debuffTargets(mode: BossDebuffTarget, rng: Rng): CharState[] {
+    if (mode === 'all') return this.livingChars();
+    if (mode === 'current-tank') {
+      const t = this.pickTarget(BOSS_ID);
+      return t ? [t] : [];
+    }
+    const living = this.livingChars();
+    return living.length > 0 ? [rng.pick(living)] : [];
+  }
+
   // ---- Character action cycle ----------------------------------------------
 
   private decide(char: CharState): void {
@@ -591,7 +641,8 @@ export class Fight {
 
   private checkPhase(): void {
     if (!this.boss || !this.setup.boss) return;
-    if (this.phase === 1 && this.boss.hpPct * 100 <= this.setup.boss.addPhase.atHpPct) {
+    const atHpPct = addsMechanic(this.setup.boss)?.atHpPct ?? 0;
+    if (this.phase === 1 && this.boss.hpPct * 100 <= atHpPct) {
       this.phase = 2;
       this.emit({ type: 'phaseChange', source: BOSS_ID, meta: { phase: 2 } });
       this.onPhase2?.();
