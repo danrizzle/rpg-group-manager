@@ -61,8 +61,18 @@ export function installBoss(fight: Fight): void {
   // check). An optional cast window (castDurationMs) makes the cast real and
   // interruptible; absent = instant, no castStart (byte-identical).
   for (const m of timelineMechanics(def)) {
-    const resolve = () => {
+    type Cast = { abilityId: string; cancelled: boolean };
+    const resolve = (token: Cast | undefined) => {
       if (fight.ended !== null || !boss.alive) return;
+      if (token) {
+        const i = fight.activeBossCasts.indexOf(token);
+        if (i >= 0) fight.activeBossCasts.splice(i, 1);
+        if (token.cancelled) {
+          // Interrupted mid-cast: no castEnd, no effect — reschedule the next.
+          fight.scheduler.in(jitter(m.everyMs), fire);
+          return;
+        }
+      }
       fight.emit({ type: 'castEnd', source: BOSS_ID, meta: { abilityId: m.id } });
       fight.noteBossCast(m.id);
       for (const c of fight.livingChars()) {
@@ -78,10 +88,12 @@ export function installBoss(fight: Fight): void {
     const fire = () => {
       if (fight.ended !== null || !boss.alive) return;
       if (m.castDurationMs && m.castDurationMs > 0) {
+        const token: Cast = { abilityId: m.id, cancelled: false };
+        fight.activeBossCasts.push(token);
         fight.emit({ type: 'castStart', source: BOSS_ID, meta: { abilityId: m.id, durationMs: m.castDurationMs } });
-        fight.scheduler.in(m.castDurationMs, resolve);
+        fight.scheduler.in(m.castDurationMs, () => resolve(token));
       } else {
-        resolve();
+        resolve(undefined);
       }
     };
     fight.scheduler.at(jitter(m.firstAtMs), fire);

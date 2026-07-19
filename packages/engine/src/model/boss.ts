@@ -1,3 +1,4 @@
+import type { DispelType } from './ability';
 import type { DamageType } from './stats';
 
 /**
@@ -31,6 +32,10 @@ export interface BossDebuff {
   damageMult?: number;
   critBonus?: number;
   absorb?: number;
+  /** Stacks up to this many (per-stack damageTakenMult compounds) — tank swaps. */
+  maxStacks?: number;
+  /** Dispellable category, if a healer can cleanse it. */
+  dispelType?: DispelType;
   /** Who it lands on: the boss's current target (tank), a random member, or all. */
   target: BossDebuffTarget;
 }

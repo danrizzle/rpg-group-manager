@@ -32,6 +32,11 @@ export function installPlan(fight: Fight): void {
       }
       return;
     }
+    if (action.kind === 'retreat') {
+      fight.emit({ type: 'planAction', source: 'party', meta });
+      fight.retreat();
+      return;
+    }
     const char = charById(action.charId);
     if (!char || !char.actor.alive) return;
     fight.emit({ type: 'planAction', source: char.actor.id, meta });
@@ -84,11 +89,14 @@ export function installPlan(fight: Fight): void {
 
 /** Flat, JSON-safe event meta for a plan action. */
 function describe(action: PlanAction): Record<string, unknown> {
-  if (action.kind === 'ability') {
-    return { kind: 'ability', charId: action.charId, abilityId: action.abilityId };
+  switch (action.kind) {
+    case 'ability':
+      return { kind: 'ability', charId: action.charId, abilityId: action.abilityId };
+    case 'stance':
+      return { kind: 'stance', charId: action.charId, ...action.patch };
+    case 'holdDps':
+      return { kind: 'holdDps', hold: action.hold };
+    default:
+      return { kind: (action as { kind: string }).kind };
   }
-  if (action.kind === 'stance') {
-    return { kind: 'stance', charId: action.charId, ...action.patch };
-  }
-  return { kind: 'holdDps', hold: action.hold };
 }

@@ -4,7 +4,18 @@ export { Scheduler } from './core/scheduler';
 export type { ActorId, CombatEvent, EventType } from './core/events';
 export type { BehaviorStats, CombatStats, DamageType } from './model/stats';
 export { GCD_MS } from './model/ability';
-export type { Ability, AbilityEffect, AbilityTag } from './model/ability';
+export type {
+  Ability,
+  AbilityEffect,
+  AbilityTag,
+  BuffEffect,
+  DamageEffect,
+  HealEffect,
+  DispelType,
+  DispelEffect,
+  TauntEffect,
+  InterruptEffect,
+} from './model/ability';
 export { DEFAULT_STANCE, validateStance } from './model/stance';
 export type { StanceConfig } from './model/stance';
 export type {

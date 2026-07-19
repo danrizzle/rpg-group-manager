@@ -88,6 +88,7 @@ function describeAction(a: PlanAction): string {
   if (match) return match.label;
   if (a.kind === 'ability') return `${a.charId}: ${a.abilityId}`;
   if (a.kind === 'stance') return `${a.charId}: stance ${JSON.stringify(a.patch)}`;
+  if (a.kind === 'retreat') return 'Retreat!';
   return a.hold ? 'Stop damage!' : 'Push!';
 }
 

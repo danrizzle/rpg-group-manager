@@ -486,25 +486,38 @@ bind from there on. As of July 2026.
         windows) → **140 green**. Verified end-to-end via a raid-style boss (a
         2.5 s Searing Brand cast applying a ×2 `damageTakenMult` to the current
         tank, recurring). Design decisions below.
-  - [ ] **Slice 4 — Type-4 machinery: stacking debuffs, taunt, dispel,
-        interrupt (engine).** GDD §4 type 4 = tank-swap debuffs (hard comp
-        requirement: 2 tanks), mandatory dispels, absorb shields — raid only.
-        `applyBuff` currently **refreshes rather than stacks**, which makes the
-        canonical tank-swap design structurally impossible: add
-        `ActiveBuff.stacks` + `maxStacks` + per-stack `damageTakenMult`.
-        Taunt is a genuine engine change (`addThreat` is private, `pickTarget`
-        recomputes top threat every swing with no stickiness): add a
-        `{kind:'taunt'}` effect + a `forcedTarget` window consulted in
-        `pickTarget`, plus a `targetChanged` event — **threat is currently
-        invisible in the stream, so without it a tank swap is unobservable
-        gameplay.** Dispel: `{kind:'dispel'}` effect + `Actor.removeBuff` (no
-        such method today) + a `dispelType` category on `BuffEffect` +
-        `buffRemoved`. Absorb already exists (`BuffEffect.absorb`) — verify at
-        raid scale. Auto policies for both (Law 2). **Pre-work: fix the
-        latent `sanitizePlan` fall-through** — after the `holdDps`/`ability`
-        early returns it reads `action.patch` unguarded, so any new action
-        kind throws on every persisted plan; `describe` in `planRunner` has
-        the same unguarded fallback.
+  - [x] **Slice 4 — Type-4 machinery: stacking debuffs, taunt, dispel,
+        interrupt (engine). ← LANDED.** All four raid primitives, each purely
+        additive → **every existing stream byte-identical** (7 solo + 3 trinity
+        `--json` + full trinity event streams diff-identical). **Landed:**
+        - **Stacking**: `ActiveBuff.stacks`/`maxStacks`; `BuffEffect.maxStacks`
+          (+ `BossDebuff.maxStacks`) — `applyBuff` bumps the stack (capped) &
+          refreshes instead of replacing; `damageTakenMult` compounds as
+          `mult^stacks`. Absent/1 = refresh (byte-identical).
+        - **Taunt**: `{kind:'taunt';durationMs}` effect → a per-enemy
+          `forcedTarget` window consulted first in `pickTarget`, plus a threat
+          bump so aggro sticks after; emits **`targetChanged`** (threat is now
+          observable in the stream — a tank swap is watchable).
+        - **Dispel**: `{kind:'dispel';dispelTypes}` effect +
+          `Actor.removeBuffsOfType`/`hasDispellable` + `BuffEffect.dispelType`
+          category; emits **`buffRemoved`**.
+        - **Interrupt**: `{kind:'interrupt'}` effect cancels a boss cast still
+          in its window (`Fight.activeBossCasts` tokens set on `castStart`,
+          checked at resolve) → **`interrupted`** event, no `castEnd`, effect
+          suppressed. Builds on slice-3 cast windows.
+        - **Auto policies (Law 2)** in a new `Fight.autoSituational` (no-op for
+          kits without these abilities, so no stream perturbation): interrupt an
+          active cast, dispel an afflicted ally, tank-swap off a co-tank at ≥2
+          stacks. Plans/calls fire them explicitly via `{kind:'ability'}`.
+        - **Pre-work done**: `sanitizePlan` + `planRunner.describe` now guard
+          every action kind (no unguarded `.patch`/holdDps fall-through); the
+          `retreat` PlanAction kind + `Fight.retreat()` + `'retreat'`
+          FightResultKind landed here as the shared hook slice 5 completes.
+        New events: `targetChanged`/`buffRemoved`/`interrupted`/`resurrect`.
+        **6 new tests** (`test/type4.test.ts`: stacking cap+compound, refresh
+        parity, auto tank-swap, auto dispel, interrupt cancels the cast, plain
+        kit emits nothing) → **146 green**. Web still typecheck + build clean
+        (PlanAction `retreat` guarded in the two label helpers).
   - [ ] **Slice 5 — Battle res + retreat (engine + web).** Per ground rule 1
         these are the *only* two calls needing engine work beyond effects.
         **Battle res** is `{kind:'ability'}` with a new `resurrect` effect:

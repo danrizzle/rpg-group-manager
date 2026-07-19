@@ -5,7 +5,16 @@ import type { DamageType } from './stats';
  * Content must never require engine changes.
  */
 
-export type AbilityTag = 'single-target' | 'aoe' | 'defensive' | 'burst' | 'consumable' | 'heal-cd';
+export type AbilityTag =
+  | 'single-target'
+  | 'aoe'
+  | 'defensive'
+  | 'burst'
+  | 'consumable'
+  | 'heal-cd'
+  | 'taunt'
+  | 'dispel'
+  | 'interrupt';
 
 export interface DamageEffect {
   kind: 'damage';
@@ -42,6 +51,9 @@ export interface HealEffect {
   target?: 'self' | 'lowest-ally' | 'party' | GroupHealTarget;
 }
 
+/** Dispellable debuff categories (GDD §4 raid dispels). */
+export type DispelType = 'magic' | 'curse' | 'poison' | 'disease';
+
 export interface BuffEffect {
   kind: 'buff';
   buffId: string;
@@ -54,9 +66,45 @@ export interface BuffEffect {
   absorb?: number;
   /** Who the buff lands on. Absent = 'self'; 'party' = every living member. */
   target?: 'self' | 'party';
+  /**
+   * Stacks up to this many applications instead of refreshing; the per-stack
+   * `damageTakenMult` compounds. Absent/1 = refresh (byte-identical). The
+   * tank-swap lever (GDD §4 type 4).
+   */
+  maxStacks?: number;
+  /** If dispellable, its category — a dispel effect matching this removes it. */
+  dispelType?: DispelType;
 }
 
-export type AbilityEffect = DamageEffect | HealEffect | BuffEffect;
+/**
+ * Taunt (GDD §4): force every enemy onto the caster for `durationMs` and
+ * leave the caster top-threat, so a tank can pull the boss off another tank.
+ */
+export interface TauntEffect {
+  kind: 'taunt';
+  durationMs: number;
+}
+
+/** Dispel (GDD §4): strip matching dispellable debuffs off allies. */
+export interface DispelEffect {
+  kind: 'dispel';
+  dispelTypes: DispelType[];
+  /** Who to cleanse. Absent = the most-afflicted ally. */
+  target?: 'lowest-ally' | 'self';
+}
+
+/** Interrupt (GDD §4): cancel a boss cast that is currently in its window. */
+export interface InterruptEffect {
+  kind: 'interrupt';
+}
+
+export type AbilityEffect =
+  | DamageEffect
+  | HealEffect
+  | BuffEffect
+  | TauntEffect
+  | DispelEffect
+  | InterruptEffect;
 
 export interface Ability {
   id: string;

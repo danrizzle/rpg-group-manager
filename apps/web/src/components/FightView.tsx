@@ -38,6 +38,7 @@ const HEAL_CD: PlanAction[] = [{ kind: 'ability', charId: 'priest', abilityId: '
 /** Human label for one adopted/logged call action (mirrors PlanPanel). */
 function callLabel(a: PlanAction): string {
   if (a.kind === 'holdDps') return a.hold ? 'Stop damage!' : 'Push!';
+  if (a.kind === 'retreat') return 'Retreat!';
   if (a.kind === 'stance') {
     const t = a.patch.targeting;
     return t === 1 ? 'Elara → Cleave' : t === 0 ? 'Elara → Focus' : `${a.charId}: stance`;
