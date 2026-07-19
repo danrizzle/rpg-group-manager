@@ -618,6 +618,7 @@ const DEFAULT_MATERIALS: Materials = {
   sunleaf: 0,
   emberbloom: 0,
   forgeSeal: 0,
+  emberCatalyst: 0,
 };
 
 /**
@@ -627,6 +628,16 @@ const DEFAULT_MATERIALS: Materials = {
  */
 const CLEAR_REWARDS: Record<string, Partial<Materials>> = {
   vulkan: { forgeSeal: 1 },
+};
+
+/**
+ * Materials paid out on EVERY kill, not just the first (unlike CLEAR_REWARDS).
+ * This is the catalyst faucet: raid bosses stay worth re-killing because they
+ * are the only source of the tier-2 crafting material (GDD §6).
+ */
+const KILL_REWARDS: Record<string, Partial<Materials>> = {
+  ashkar: { emberCatalyst: 2 },
+  vael: { emberCatalyst: 2 },
 };
 
 /**
@@ -1341,14 +1352,25 @@ export const useStore = create<Store>()(
             ? { ...get().dungeonCleared, [encounterId]: true }
             : get().dungeonCleared;
 
-          // First clear pays its trophy, if the encounter has one. Guaranteed
-          // and once — the reward exists to gate the next tier, not to farm.
+          // Rewards, both guaranteed rather than rolled — loot rules are an
+          // open GDD question, and deterministic payouts give the tier gate and
+          // the catalyst loop what they need without inventing drop tables.
+          //   · CLEAR_REWARDS: first clear only — a trophy that gates the next
+          //     tier (the forge seal), never farmable.
+          //   · KILL_REWARDS: every kill — the crafting faucet, so the raid
+          //     stays worth re-running (GDD §6).
           let nextMaterials = get().materials;
-          const reward = firstClear ? CLEAR_REWARDS[encounterId] : undefined;
-          if (reward) {
+          const killed = result.result === 'kill' && encounterId;
+          const payouts = [
+            firstClear ? CLEAR_REWARDS[encounterId] : undefined,
+            killed ? KILL_REWARDS[encounterId] : undefined,
+          ].filter(Boolean);
+          if (payouts.length > 0) {
             nextMaterials = { ...nextMaterials };
-            for (const [m, n] of Object.entries(reward)) {
-              nextMaterials[m as keyof Materials] += n;
+            for (const reward of payouts) {
+              for (const [m, n] of Object.entries(reward!)) {
+                nextMaterials[m as keyof Materials] += n;
+              }
             }
           }
 
@@ -1507,7 +1529,7 @@ export const useStore = create<Store>()(
             if (!recipe || count < 1 || !Number.isInteger(count)) return {};
             if ((s.inventory[recipeId] ?? 0) + count > bankCapacity(s.buildings)) return {};
             const materials = { ...s.materials };
-            for (const [herb, per] of Object.entries(recipe.herbs)) {
+            for (const [herb, per] of Object.entries(recipe.cost)) {
               const need = per * count;
               if ((materials[herb as keyof Materials] ?? 0) < need) return {};
               materials[herb as keyof Materials] -= need;
@@ -1551,7 +1573,7 @@ export const useStore = create<Store>()(
               if (recipe && refundUnits > 0) {
                 const cap = bankCapacity(s.buildings);
                 const materials = { ...s.materials };
-                for (const [herb, per] of Object.entries(recipe.herbs)) {
+                for (const [herb, per] of Object.entries(recipe.cost)) {
                   // Refunds clamp at the bank cap (never-confiscate rule);
                   // the excess is lost — rare: needs herbs at cap AND a cancel.
                   const cur = materials[herb as keyof Materials] ?? 0;
@@ -1638,7 +1660,7 @@ export const useStore = create<Store>()(
     },
     {
       name: 'rpg-world-v1',
-      version: 13,
+      version: 14,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         characters: s.characters,
@@ -1703,6 +1725,7 @@ export const useStore = create<Store>()(
         s.plans = { ...(s.plans ?? {}) };
         // (v12, slice 10: `unlocks.raidAccess` and `materials.forgeSeal` join
         // via the unconditional backfills above — both default to off/0.)
+        // (v14, slice 12: `materials.emberCatalyst` joins the same way.)
         // ---- v11 (phase-5 slice 8): the uniform `characters` record ---------
         // Elara's legacy top-level build fields and the `roster` record fold
         // into one map. The FOUNDERS KEEP THEIR IDS ('mage'/'warrior'/'priest'),

@@ -60,6 +60,12 @@ export interface Materials {
    * the raid gate reads as a pre-quest rather than a material sink (GDD §5).
    */
   forgeSeal: number;
+  /**
+   * Cinderforge catalyst (slice 12). Guaranteed per boss clear, spent on the
+   * raid-tier alchemy recipes — GDD §6's catalyst model, which keeps the raid
+   * relevant as a material source rather than only a loot faucet.
+   */
+  emberCatalyst: number;
 }
 
 /** Crafted consumables by engine consumable id (slice 5 alchemy output). */

@@ -18,21 +18,34 @@ export const MATERIAL_LABELS: Record<keyof Materials, string> = {
   sunleaf: 'sunleaf',
   emberbloom: 'emberbloom',
   forgeSeal: 'forge seal',
+  emberCatalyst: 'ember catalyst',
 };
 
 export interface Recipe {
   /** == engine consumable id (1:1 in v1). */
   id: string;
   name: string;
-  herbs: Partial<Record<HerbId, number>>;
+  /**
+   * Materials consumed per unit. Herbs for the tier-1 recipes; the raid tier
+   * also spends `emberCatalyst`, which drops only from Cinderforge — GDD §6's
+   * catalyst model, where a new tier is gated on the previous content's
+   * materials and old content therefore stays relevant.
+   */
+  cost: Partial<Record<keyof Materials, number>>;
   /** Game-ms per crafted unit. */
   unitGameMs: number;
+  /** Requires the raid to have been entered — hidden in the alchemy list until then. */
+  raidTier?: boolean;
 }
 
 export const RECIPES: Recipe[] = [
-  { id: 'healing-potion', name: 'Healing Potion', herbs: { sunleaf: 2 }, unitGameMs: 5 * MIN },
-  { id: 'flask-of-embers', name: 'Flask of Embers', herbs: { sunleaf: 2, emberbloom: 2 }, unitGameMs: 10 * MIN },
-  { id: 'fire-ward-potion', name: 'Fire Ward Potion', herbs: { emberbloom: 3 }, unitGameMs: 10 * MIN },
+  { id: 'healing-potion', name: 'Healing Potion', cost: { sunleaf: 2 }, unitGameMs: 5 * MIN },
+  { id: 'flask-of-embers', name: 'Flask of Embers', cost: { sunleaf: 2, emberbloom: 2 }, unitGameMs: 10 * MIN },
+  { id: 'fire-ward-potion', name: 'Fire Ward Potion', cost: { emberbloom: 3 }, unitGameMs: 10 * MIN },
+  // Raid tier: one catalyst each, so a clear's worth of catalysts converts
+  // into a handful of raid consumables rather than an endless supply.
+  { id: 'ember-draught', name: 'Ember Draught', cost: { emberbloom: 4, emberCatalyst: 1 }, unitGameMs: 15 * MIN, raidTier: true },
+  { id: 'cinderguard-tonic', name: 'Cinderguard Tonic', cost: { emberbloom: 4, emberCatalyst: 1 }, unitGameMs: 15 * MIN, raidTier: true },
 ];
 
 export const RECIPES_BY_ID: Record<string, Recipe> = Object.fromEntries(
