@@ -4,25 +4,33 @@
 
 **Phase 4 (Group content) COMPLETE — all 6 slices done (party sim, trinity +
 Ember Forge, roster/dungeon web, boss journal, boss plans, live calls).**
-Phase 5 (roster & raids) is on a **7-slice plan**. Slices **1–6 are landed**
-and **slice 7 is engine-complete** (raid content + comp rules; its web pull UI,
-access-building gate, and catalyst crafting are documented follow-ups):
-`MAX_PARTY_SIZE` is a hard 10 with the four size cliffs fixed; `BossDefinition`
-is a `mechanics: Mechanic[]` list; the type-4 stack (stacking tank-swap debuffs,
+**Phase 5 (roster & raids) COMPLETE — 13 slices** (the original 7-slice plan
+plus 8–13, which finished slice 7's deferred web work). `MAX_PARTY_SIZE` is a
+hard 10 with the four size cliffs fixed; `BossDefinition` is a
+`mechanics: Mechanic[]` list; the type-4 stack (stacking tank-swap debuffs,
 taunt, dispel, interrupt, cast windows) is built and auto-answered; battle res +
-retreat work; recruits have real talent trees; and the first 10-man raid
-(**Cinderforge**) exercises the whole stack. Every solo + trinity stream stayed
-byte-identical throughout; **161 engine tests green, web typecheck + build
-clean.** Remaining before phase 6: the slice-7 web integration, a Normal≈90% /
-Heroic retune, and the open raid design questions (lockouts, loot). As of
-July 2026.
+retreat work; every character shares one uniform build model; the roster grows
+past 10 via milestones and you pick who raids; and the first 10-man raid
+(**Cinderforge**) is playable in the browser with its own access gate, catalyst
+economy and loadout library. Every solo + trinity stream stayed byte-identical
+throughout. **Next: phase 6 (guilds).** As of July 2026.
 
-**Post-merge verification (2026-07-19).** PR #1 merged to `main`; the HANDOFF.md
-script was executed in full on a machine with a real browser, closing the gap
-the remote container left open. **All green.** Details in "Phase 5 — post-merge
-verification" below. The remaining phase-5 work is planned as **slices 8–13**
-(uniform character model → roster growth → Warcamp access gate → Cinderforge
-raid UI → catalysts → loadout library); see "Phase 5 — remaining slice plan".
+**PHASE 5 COMPLETE (2026-07-19).** PR #1 was verified post-merge (details in
+"Phase 5 — post-merge verification"), then the deferred web work landed as
+**slices 8–13**: the uniform character model, roster growth, the Warcamp access
+gate, the Cinderforge raid UI, the catalyst economy and the loadout library.
+**The raid is playable end to end** — build a roster past 10, pick the ten who
+go, kill Ashkar and Vael with role-grouped frames and auto tank swaps, earn
+catalysts, craft raid consumables, and assign loadouts per boss. **166 engine
+tests green; both typechecks + web build clean; all 8 CLI streams
+byte-identical vs `c9ef804` throughout.** Persist ran v10 → **v15**.
+
+**Open before phase 6** (none blocking): the raid **balance retune** (Normal ≈
+90% + a Heroic variant — currently ~100% at default gear, and the TTK
+distribution is too tight for a clean enrage wall without survivability
+variance), the **full ~15-call GDD §3 palette** (3 calls ship), and **loot
+rules** — still the largest genuine GDD gap, deliberately sidestepped by making
+every reward deterministic.
 
 ## Phase checklist
 
@@ -343,7 +351,7 @@ raid UI → catalysts → loadout library); see "Phase 5 — remaining slice pla
         → divine-hymn plan entry → next pull fires "PLAN — Seren: Divine
         Hymn!"; solo Cinder Maw unchanged. All 126 engine tests green; web
         typecheck + build clean.
-- [ ] **Phase 5 — Roster & raids** (slice plan authored 2026-07-18, before
+- [x] **Phase 5 — Roster & raids** ✅ (slice plan authored 2026-07-18, before
       any phase-5 code; same cross-cutting gates as phase 4: engine before
       web inside every slice; byte-identity for all existing streams when new
       args are absent; CLI `--json` baselines captured pre-change and
@@ -609,15 +617,70 @@ raid UI → catalysts → loadout library); see "Phase 5 — remaining slice pla
           `--pnotal`; the raid comp comes specced (threat/throughput builds).
         - CLI `--raid --boss ashkar|vael`; engine exports for the raid + comp
           helpers. **161 engine tests green; all existing streams byte-identical.**
-        **Deferred (web) — now scheduled as slices 8–13** (see "Phase 5 —
-        remaining slice plan"): the raid **pull UI** (10-man assembly, raid view
-        — the dungeon path is trinity-shaped today) → slice 11; the **access
-        building** gate (§5) → slice 10, retargeted as a **zone-sited**
-        construction on the bridge pattern rather than a `world/base.ts`
-        building (decision below); the **catalyst crafting** economy → slice 12.
-        The group-CD "first member of the class carries the CD"
-        order-dependence is **not a phase-6 note any more** — a reorderable
-        roster makes it live, so it is fixed in slice 8.
+        ~~**Deferred (web)**~~ — **all landed as slices 8–13** below.
+  - [x] **Slice 8 — the uniform `characters{}` model (engine + web, v11).
+        ← THE RISK SLICE.** One record replaces Elara's legacy top-level build
+        fields AND the two-entry `roster`, with an explicit `rosterOrder`;
+        `charBuild` loses its mage-vs-recruit branch and the `activeChar:
+        'elara'` sentinel is gone. `assembleParty()` replaces the hardcoded
+        trinity in `pullEncounter`. **Engine:** the group-CD carrier is chosen
+        by smallest id instead of array position — it was a reference-identity
+        check against the FIRST element of the class, so reordering the roster
+        silently moved Battle Shout and invalidated plans keyed on `charId`.
+        Founders keep their bare ids, so no persisted `plans[].charId`,
+        `familiarity` or journal key needed remapping. **Caught mid-refactor:**
+        `CharacterBuild.behavior` had to be a PARTIAL override — the classes
+        ship different `damageWhileMoving` bases (0.6 mage / 0.8 warrior / 0.5
+        priest) and a filled object would have flattened all three onto the
+        mage's, invisibly (it moves no HP/AP/armor and the UI never shows it).
+        Two tests now pin it. Same pass fixed `runGrind` discarding recruit
+        talents — live since slice 6, so the map showed recruits grinding
+        untalented while the dungeon fought them specced.
+  - [x] **Slice 9 — roster growth via milestone slots (web).** Ramp as data in
+        `world/roster.ts`: 3 → 5 (Slagmaw) → 7 (Ember Forge) → 10 (Warcamp) →
+        12 (first Cinderforge boss), cumulative so a milestone can never shrink
+        a live roster. Earning a slot and FILLING it are separate — slots come
+        only from progression (§2, no barracks), but the class is the player's
+        choice, because the 2/3/5 comp rule means no auto-grant could know the
+        intent. `recruit(classId)` allocates the next id on the frozen
+        convention and opens a world lane. Class registry (`CLASSES`/`MAKERS`)
+        replaced the per-class ternaries.
+  - [x] **Slice 10 — the Warcamp, a zone-sited raid access gate (web, v12).**
+        §5's access building, built in the Cinder Wastes on the **bridge
+        pattern** rather than at the base — `world/base.ts` states buildings ADD
+        capability and never gate, so siting it there would have made it the
+        first blocking building and broken that rule. Costs 40 timber + 20
+        emberbloom + 1 **forge seal**, a guaranteed FIRST-CLEAR reward for
+        Vulkan. Sets `unlocks.raidAccess` and grants roster slot 10.
+  - [x] **Slice 11 — Cinderforge raid pull UI (engine + web, v13).** The raid
+        the engine could already run but nothing referenced. Engine:
+        `checkRaidComp` gained a structured `RaidCompReport` (per-role
+        have/need/ok) so a builder can render "2/3 healers". Web: a `DUNGEONS`
+        registry replaces the hardcoded Ember Forge everywhere; `RaidRosterPicker`
+        picks 10 with live comp chips and per-candidate familiarity;
+        `pullEncounter`/`finalizeFight`/the worker all derive from the party.
+        **The familiarity loop previously credited the literal trio**, so a
+        10-man would have credited three of ten and broken benching pressure.
+        `PlanPanel`'s palette and `FightView`'s `callLabel` are kit-derived —
+        both keyed on class ids before, which at raid size binds every
+        `charId:'warrior'` entry to one tank silently. Frames are role-grouped
+        (tanks first, two columns) above five players.
+  - [x] **Slice 12 — catalyst economy (engine content + web, v14).** Two
+        raid-tier consumables (Ember Draught, Cinderguard Tonic), each
+        sharpening ONE axis so §6's ward-vs-flask slot decision survives at raid
+        tier. `emberCatalyst` pays 2 per raid boss KILL via `KILL_REWARDS` —
+        distinct from slice 10's first-clear `CLEAR_REWARDS`: the seal is a tier
+        gate and must not be farmable, the catalyst is a faucet and must be.
+        Both guaranteed, so the loop works without inventing loot rules.
+        `Recipe.herbs` → `Recipe.cost` over all materials. **Deliberately not
+        crafted gear** — see the scope note below.
+  - [x] **Slice 13 — loadout library (web, v15).** Closes Law 1's third raid
+        system. Names are unique per (class, name) — a global name space had a
+        mage "Raid" and a warrior "Raid" overwrite each other. The panel is
+        class-scoped and renders for every character. Per-boss assignment
+        (`bossLoadouts`) with "Equip all (N)", applied ON DEMAND rather than at
+        pull time so the character panel never lies about what a character
+        wears; deleting a loadout drops its assignments.
 - [ ] **Phase 6 — Guilds**: accounts/sync, server-authoritative real fights
       (Fastify + Postgres, same engine), guild bank, world bosses
 - [ ] **Phase 7 — Expansion stages** (as needed): traits, council/split/soak,
@@ -671,7 +734,7 @@ attempt recorded **once** (no double-count). **Zero console errors.**
    the seed too. Always stash the real save to a file first; migrations run on
    page load, so *opening the app is the test*.
 
-## Phase 5 — remaining slice plan (authored 2026-07-19)
+## Phase 5 — slices 8–13 as planned (authored 2026-07-19, all landed)
 
 Scope fixed by the user: slice 7's deferrals + the loadout library + roster
 growth. **Explicitly out of scope**: the raid balance retune (Normal≈90% /
@@ -731,9 +794,20 @@ generalization from exactly-3 characters to N.
 - **Slice 13 — loadout library.** UI only (`Loadout.classId` landed in slice
   6): per-class panels, grouping/filter, per-boss assignment.
 
-**Also logged for later, not scheduled:** "All CDs now!" at 10-man fires ~15
-actions and re-runs the fight for the whole batch. Semantically correct (it is a
-burst window), but palette depth belongs to the out-of-scope call-palette work.
+**Also logged for later, not scheduled:**
+
+- "All CDs now!" at 10-man fires ~15 actions and re-runs the fight for the whole
+  batch. Semantically correct (it is a burst window), but palette depth belongs
+  to the out-of-scope call-palette work.
+- **Crafted GEAR is deliberately not built** (slice 12 shipped raid-tier
+  consumables instead). §6 frames catalysts around tier-2 weapons, but items
+  carry `tier` as pure balance labelling with no cost or source, there is no
+  recipe→item path anywhere, and all gear is **free-pick** in the dropdowns —
+  so crafted gear means introducing gear **ownership**, which retroactively
+  gates every item already selectable. That is a game-wide design change, not a
+  completion task, and needs its own scoped slice and its own decision.
+- The **enrage/speed control resets to 1× on every pull**, which is mildly
+  annoying when re-running a 3-minute raid boss. Cosmetic; noted while testing.
 
 **GDD amendments owed** (in addition to the 10-man corrections above): §5's
 access buildings are **zone-sited constructions**, not `world/base.ts`
