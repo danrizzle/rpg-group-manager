@@ -13,7 +13,9 @@ retreat work; every character shares one uniform build model; the roster grows
 past 10 via milestones and you pick who raids; and the first 10-man raid
 (**Cinderforge**) is playable in the browser with its own access gate, catalyst
 economy and loadout library. Every solo + trinity stream stayed byte-identical
-throughout. **Next: phase 6 (guilds).** As of July 2026.
+throughout. **Next: phase 5.5 — a real, mobile-first game UI** (user direction:
+the current interface is "an HTML data calculator"), then phase 6 (guilds).
+As of July 2026.
 
 **PHASE 5 COMPLETE (2026-07-19).** PR #1 was verified post-merge (details in
 "Phase 5 — post-merge verification"), then the deferred web work landed as
@@ -25,12 +27,19 @@ catalysts, craft raid consumables, and assign loadouts per boss. **166 engine
 tests green; both typechecks + web build clean; all 8 CLI streams
 byte-identical vs `c9ef804` throughout.** Persist ran v10 → **v15**.
 
-**Open before phase 6** (none blocking): the raid **balance retune** (Normal ≈
-90% + a Heroic variant — currently ~100% at default gear, and the TTK
-distribution is too tight for a clean enrage wall without survivability
-variance), the **full ~15-call GDD §3 palette** (3 calls ship), and **loot
-rules** — still the largest genuine GDD gap, deliberately sidestepped by making
-every reward deterministic.
+**Still owed, none blocking:** the raid **balance retune** (Normal ≈ 90% + a
+Heroic variant — currently ~100% at default gear, and the TTK distribution is
+too tight for a clean enrage wall without survivability variance; engine-only,
+worth doing before world-boss tuning inherits its conventions) and the **full
+~15-call GDD §3 palette** (3 calls ship — naturally paired with the UI work,
+since the palette is where the calls live).
+
+**Deferred by decision, not oversight** (user, 2026-07-19): **loot rules** stay
+out of scope until they get real design work — every reward remains
+deterministic, as phase 5 established. **Crafted gear** likewise: §6 frames
+catalysts around tier-2 weapons, but that requires introducing gear
+**ownership**, which retroactively gates every item currently free-pick in the
+dropdowns.
 
 ## Phase checklist
 
@@ -681,24 +690,42 @@ every reward deterministic.
         (`bossLoadouts`) with "Equip all (N)", applied ON DEMAND rather than at
         pull time so the character panel never lies about what a character
         wears; deleting a loadout drops its assignments.
+- [ ] **Phase 5.5 — Real game UI, mobile-first. ← NEXT** (user direction,
+      2026-07-19: the current interface is "an HTML data calculator" and must
+      become a real game UI that works on mobile, not just desktop). **This is
+      closing a gap against the GDD, not polish:** §1 says "Platforms: PC,
+      browser, mobile — no mechanical demands… so all platforms are equal", and
+      §3 calls the tactical pause "usable on mobile too". Today the app is a
+      3-column desktop grid with plain `<select>` controls, ~9.5 kB of
+      hand-written CSS, no design system, and exactly one responsive rule (the
+      900 px raid-frame breakpoint from slice 11). Priorities: the **fight view**
+      (the game's spectacle — you never input during combat, you watch the plan
+      play out), the **call palette** (the only time-pressured interaction in the
+      game, so it must be thumb-reachable), **ten raid frames on a phone** with
+      role grouping preserved, and making §8 Law 1's progressive disclosure feel
+      deliberate. **Presentation-layer only — the store stays UI-agnostic and the
+      persist chain (v15) must not move for cosmetic reasons.** Highest
+      regression risk in the repo's history, because `apps/web` has zero tests;
+      see `HANDOFF.md` §1.
 - [ ] **Phase 6 — Guilds**: accounts/sync, server-authoritative real fights
       (Fastify + Postgres, same engine), guild bank, world bosses.
-      **← NEXT. See `HANDOFF.md` for the orientation brief.** Phase 6 is the
-      first phase that breaks the pure-client architecture phases 1–5 relied
-      on (no server, no accounts, one localStorage key), so it is a new axis
-      rather than one more slice. Two things make it tractable and both already
-      hold: the engine is pure and deterministic, so a server can re-run a
-      client's fight and get bit-identical results; and outcomes are derived
-      from the event stream, so world-boss damage contribution needs no new
-      scoring path. `model/journal.ts`'s monotone merge is already the
-      guild-wide discovery mechanism §7 asks for.
-      **Resolve before planning slices:** (a) what the server is authoritative
-      OVER — re-running every fight is honest but adds latency to a pull, while
-      trusting the client makes a leaderboard meaningless; (b) loot rules,
-      which phase 5 deliberately sidestepped with deterministic rewards and
-      guild rewards will re-open. **Consider first:** the owed raid balance
-      retune — engine-only, self-contained, and world-boss tuning will inherit
-      whatever conventions it sets.
+      **RESOLVED (user, 2026-07-19): the server is authoritative over
+      EVERYTHING.** Real fights happen on the server; the client replays the
+      finished event stream like a video. This fits the existing architecture
+      rather than replacing it — the engine is pure and deterministic, and
+      `fight/replay.ts` already folds a `CombatEvent[]` into UI state, so only
+      the stream's *origin* changes. Consequences: live calls become one
+      round-trip per call (the past stays byte-identical either way, so the
+      semantics survive); the **training dummy stays client-side** (free,
+      unlimited, awards nothing — there is nothing to cheat, per §3); the
+      **world loop moves too**, since grind/gather/craft award things and
+      `advanceAll` is a pure reducer that runs server-side unchanged; and the
+      local save becomes a **cache rather than the truth**.
+      **Loot rules: deliberately OUT OF SCOPE** (user, 2026-07-19) — they need
+      real design work first. Every reward stays deterministic, as phase 5
+      established; do not improvise a second ad-hoc scheme.
+      `model/journal.ts`'s monotone merge is already the guild-wide discovery
+      mechanism §7 asks for.
 - [ ] **Phase 7 — Expansion stages** (as needed): traits, council/split/soak,
       difficulty tiers, affixes, timed runs, behavior-effect uniques,
       graphical replay
@@ -983,9 +1010,14 @@ back-filled into DESIGN.md rather than living only here.
    attempts**. Recommendation: no lockouts in v1; revisit with guilds
    (phase 6), where shared kills already imply windows.
 4. **Loot rules.** Undefined — "loot" appears only as a yes/no column in the
-   sim-vs-real table. Catalyst progression (§6) is meaningless without drop
-   tables, per-roster distribution, and some bad-luck protection. This is
-   the largest genuine gap.
+   sim-vs-real table. Drop tables, per-roster distribution and bad-luck
+   protection are all unspecified, and this is the largest genuine gap.
+   **DEFERRED BY DECISION (user, 2026-07-19): out of scope until it gets real
+   design work of its own.** Phase 5 showed the game works without it —
+   catalyst progression shipped on *deterministic* rewards instead (guaranteed
+   first-clear trophies + guaranteed per-kill catalysts), which sidesteps drop
+   tables entirely. Hold that pattern; do not improvise a second scheme inside
+   another feature.
 5. **Benching / roster rotation.** Never mentioned, but per-character boss
    familiarity (§2) creates an implicit anti-rotation pressure: a benched
    character is an unfamiliar one. Either accept that as intended depth or

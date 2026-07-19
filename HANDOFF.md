@@ -1,12 +1,11 @@
-# Phase 6 — Guilds: handoff for a fresh session
+# Handoff for a fresh session — next up: the game UI, then guilds
 
 **Status: phase 5 is COMPLETE and merged to `main` (`5e602ad`).** 166 engine
 tests green, both typechecks + web build clean, working tree clean.
 
-Start by reading `STATUS.md` (the ledger — phases 1–5 and every design decision
-behind them), then `DESIGN.md` §7 (Guilds), §6 (economy/guild bank) and §8
-(the two complexity laws). This file is the orientation layer on top of those:
-what phase 6 actually costs, what is already true, and where the traps are.
+Read `STATUS.md` first (the ledger — phases 1–5 and the design decisions behind
+them), then the `DESIGN.md` sections named below. This file is the orientation
+layer: what to build next, what is already true, and where the traps are.
 
 Everything runs in Docker via the wrappers — never install tooling on the host.
 
@@ -20,131 +19,166 @@ Everything runs in Docker via the wrappers — never install tooling on the host
 
 ---
 
-## 1. Read this before planning anything
+## 0. Decisions taken by the user (2026-07-19) — do not re-litigate
 
-**Phase 6 is the first phase that breaks the architecture every earlier phase
-relied on.** Phases 1–5 shipped a pure client: no server, no accounts, no
-network, all state in one `localStorage` key. Guilds need accounts, sync and a
-shared authority. That is not "one more slice" — it is a new axis, and §8's
-Law 1 explicitly warns that a game gets complicated when systems arrive
-*simultaneously*.
+**1. The server is authoritative over EVERYTHING. Real fights happen on the
+server; the client replays the finished event stream like a video.**
 
-Two things make it tractable, and both are already true:
+This is a clean fit for the existing architecture rather than a rewrite, for
+two reasons that already hold: the engine is pure and deterministic (a fight is
+a pure function of `(setup, seed)`), and the client's fight view is *already* a
+replay — `fight/replay.ts` folds a `CombatEvent[]` into UI state, and
+`FightView` plays it back on a clock. Today the stream comes from a local
+`runFight`; tomorrow it arrives over the network. The playback layer barely
+changes.
 
-- **The engine is pure and deterministic.** `packages/engine` has zero runtime
-  dependencies and runs unchanged in Node and the browser (see `CLAUDE.md` —
-  this is an architecture rule, not an accident). A fight is a pure function of
-  `(setup, seed)`. A server can therefore *re-run* a client's fight and get
-  bit-identical results, which is what makes "server-authoritative real fights"
-  cheap rather than a rewrite.
-- **The event stream is the only source of truth for outcomes.** Damage
-  contributed to a world boss is derivable from `CombatEvent[]` by the same
-  code the client already uses (`analysis/metrics.ts`). No new scoring path.
+Implications worth knowing before you plan (each is a real consequence, not a
+blocker):
 
-**The single biggest open question is what the server is authoritative OVER.**
-Re-running every fight server-side is the honest answer but changes the feel of
-the game (latency on a pull). Trusting the client and only sharing outcomes is
-cheap but makes a world-boss leaderboard meaningless. Decide this **before**
-writing any server code — it determines the entire shape of phase 6.
+- **Live calls become a round-trip.** Today a call appends `{atMs, action}` and
+  re-runs `runFight` locally, which is instant. Server-side that is one request
+  per call, returning a new stream that the client swaps in at the frontier.
+  The past stays byte-identical either way (engine purity guarantees it), so the
+  semantics survive — only the latency is new.
+- **The training dummy should almost certainly stay client-side.** It is free,
+  unlimited, consumes nothing and awards nothing (GDD §3) — there is nothing to
+  cheat. It runs 1,000–5,000 Monte Carlo fights in a Web Worker; moving that to
+  the server buys no integrity and costs a lot of compute. Authority is only
+  needed where something is *earned*.
+- **The world loop is also "earning" and therefore also moves.** Grind, gather
+  and craft award XP and materials. `advanceWorld`/`advanceAll` are pure
+  reducers, so they run server-side unchanged — and offline catch-up ("what
+  happened while I was away") is *more* natural on a server than in a client
+  that has to trust its own clock.
+- **The local save becomes a cache, not the truth.** Plan that transition
+  explicitly rather than letting the two drift; see §4.
 
----
+**2. Loot rules are deliberately OUT OF SCOPE for now.** They need real design
+work first, and that design is not something to improvise inside another
+feature. Phase 5 already proved the game works without them: every reward is
+deterministic (guaranteed first-clear trophies, guaranteed per-kill catalysts).
+Keep that pattern until loot is designed properly, and do not invent a second
+ad-hoc reward scheme in the meantime.
 
-## 2. What exists today (the ground truth)
-
-- **Workspace:** `packages/engine` (pure sim) + `apps/web` (React + Zustand).
-  `pnpm-workspace.yaml` already globs `apps/*` and `packages/*`, so an
-  `apps/server` slots in with no tooling changes.
-- **Engine deps:** none at runtime. Keep it that way — it is why the same code
-  can be the server's referee.
-- **Web deps:** react, react-dom, zustand, `@rpg/engine`. No router, no data
-  layer, no auth. All of that is phase-6 greenfield.
-- **All state is one `localStorage` key** (`rpg-world-v1`), currently at
-  **persist v15**, written by Zustand `persist` with an explicit `partialize`
-  allowlist in `apps/web/src/store.ts` (~line 1712). The persisted shape is:
-  `characters`, `rosterOrder`, `loadouts`, `dungeonCleared`, `raidRoster`,
-  `bossLoadouts`, `journal`, `familiarity`, `plans`, `unlocks`, `materials`,
-  `inventory`, `buildings`, `attempts`, `chars`, `lastSeenWall`, `multiplier`.
-  **That allowlist is your account schema.** It is already a clean, serializable
-  snapshot of a player — syncing it is a smaller job than it sounds.
-- **Docker:** `compose.yaml` runs a single `dev` service, host `5174` →
-  container `5173`. A server needs a second service and a second port mapping.
-- **No CI, no lint step, no test runner for the web app.** The gates are the
-  four commands above, run by hand. The engine has 166 tests; `apps/web` has
-  **zero** — every web slice so far was verified in a real browser instead
-  (see §5).
+**3. The next work is a REAL GAME UI, and it comes before guilds.** The current
+interface is, in the user's words, "an HTML data calculator" — and it must be
+usable on mobile, not just desktop.
 
 ---
 
-## 3. What phase 6 is, per the GDD
+## 1. Next phase: the game UI (mobile-first)
 
-§7 lists three features. They are not equal in size:
+This is not polish. **`DESIGN.md` §1 says "Platforms: PC, browser, mobile — no
+mechanical demands… so all platforms are equal", and §3 calls the tactical
+pause "usable on mobile too."** The current UI does not honor its own spec, so
+this is closing a gap between the game and its design doc.
+
+### What exists today
+
+- React + Zustand, no router — the three top-level views (World · Base ·
+  Combat) are a `view` field in the store.
+- A **3-column desktop grid** (`.columns` in `styles.css`), ~9.5 kB of
+  hand-written CSS, no design system, no icons, no animation.
+- Plain `<select>` dropdowns for everything meaningful: gear, consumable slots,
+  plan triggers and actions, boss-loadout assignment.
+- The fight view is HP bars + cast bars + a scrolling text log. Raid frames got
+  a role-grouped 2-column grid in slice 11 with a 900 px breakpoint — that is
+  the *only* responsive rule in the codebase.
+
+### What matters most, in order
+
+1. **The fight view is the game's spectacle.** This is a management game: you
+   never input during combat, you *watch* the plan you built play out. It is
+   the screen that most needs to stop looking like a spreadsheet, and the one
+   where a real game feel pays off most.
+2. **The call palette must be thumb-reachable.** Live calls at the frontier are
+   the single time-pressured interaction in the entire game (everything else is
+   turn-free). On a phone those buttons belong in the bottom third of the
+   screen, not above a scrolling log.
+3. **Ten raid frames on a phone.** The current 2-column grid is a stopgap. Role
+   grouping (tanks first) is load-bearing — during a tank swap those are the
+   bars you are actually watching.
+4. **Progressive disclosure is already a design law** (§8 Law 1: each stage
+   introduces at most one or two systems; "stances, call buttons and plan slots
+   only appear once unlocked"). The components already gate on unlock flags —
+   a real UI should make that feel deliberate rather than incidental.
+
+### Traps
+
+- **This is a presentation-layer rewrite. The store is UI-agnostic and should
+  stay that way.** Do not touch the persist chain (v15) to make the UI nicer.
+- **`apps/web` has ZERO tests.** A UI overhaul is therefore the
+  highest-regression-risk work in the repo's history, and in-browser
+  verification per slice is the only gate. Consider adding component tests
+  early — this is the moment where "we'll add tests later" stops being free.
+- **`FightView`'s frontier clock and live-edge guard are subtle** (phase-4
+  slice 6): playback is locked to the furthest point watched, and call buttons
+  enable only within 200 ms of the live edge, so a rewound view cannot rewrite
+  events the player already saw. Re-skinning must preserve those semantics —
+  read the slice-6 notes in `STATUS.md` before touching it.
+- **`fight/replay.ts` and `analysis/metrics.ts` are already N-actor
+  generalized.** A new fight UI consumes the same actors and the same
+  per-character summaries; you should not need new data plumbing.
+
+---
+
+## 2. After the UI: phase 6 (guilds)
+
+`DESIGN.md` §7. Three features, very unequal in size:
 
 | Feature | Real cost | Notes |
 |---|---|---|
-| **Accounts + sync** | **The whole phase, really.** | Server, DB, auth, conflict resolution, offline-first. Everything else depends on it. |
-| **Guild bank** | Small once sync exists | §6. The bank is already a shared pool locally (`materials`/`inventory` + `bankCapacity`); making it guild-shared is mostly authority, not mechanics. |
-| **Guild world bosses** | Medium | The interesting one. Each member sends their own roster at a shared HP pool; contributed damage is summed; the journal is guild-wide. |
+| **Accounts + sync** | **The whole phase, really.** | Server, DB, auth, conflict resolution. With decision #1 the server also becomes the fight referee and the world-loop clock. |
+| **Guild bank** | Small once sync exists | §6. The bank is already a shared pool locally (`materials`/`inventory` + `bankCapacity`); making it guild-shared is authority, not mechanics. |
+| **Guild world bosses** | Medium | The design payoff — and it fits the engine almost perfectly. |
 
-**World bosses are the design payoff and they fit the existing engine almost
-perfectly**: each member's attempt is a normal fight against a boss with a huge
-HP pool, and their contribution is damage dealt, off the event stream. The
-"shared journal" is `model/journal.ts`'s monotone merge — which is *already* a
-merge over discovered-mechanic sets, so guild-wide discovery is `discover()`
-folded across members rather than anything new. Read that file before designing
-this; the hard part is already done.
+**World bosses:** each member sends their own roster at a shared HP pool and
+contributes the damage dealt; the boss dies when the pool empties. Contribution
+is derivable from the event stream by the code the client already uses. The
+"guild-wide journal" §7 asks for is `model/journal.ts`'s **monotone merge** —
+already a merge over discovered-mechanic sets, so guild-wide discovery is
+`discover()` folded across members rather than anything new. Read that file
+before designing this; the hard part exists.
 
 **Rewards must not be exclusive gear** (§7 is explicit — the guild is not a
-power requirement). Cosmetics, titles, a temporary guild-wide buff, and rare
+power requirement): cosmetics, titles, a temporary guild-wide buff, and rare
 crafting materials that feed the *existing* economy.
 
 ---
 
-## 4. Traps and open questions, in the order they will bite
+## 3. Also owed (small, self-contained)
 
-1. **Decide the authority model first** (see §1). Everything downstream depends
-   on it.
-2. **Loot rules are still unresolved and now matter more.** STATUS's "open
-   design questions" flag this as the largest genuine GDD gap. Phase 5
-   sidestepped it by making every reward deterministic (guaranteed first-clear
-   trophies + guaranteed per-kill catalysts). Guild rewards re-open it — resolve
-   it deliberately rather than inventing a second ad-hoc scheme.
-3. **Raid balance is untuned.** Ashkar and Vael sit near ~100% at default gear.
-   The retune to Normal ≈ 90% plus a Heroic variant is still owed and needs
-   *survivability variance* — the TTK distribution is currently too tight for a
-   clean enrage wall. Consider doing this BEFORE guilds: world-boss tuning will
-   inherit whatever conventions the raid establishes.
-4. **The persist migration chain is long (v15).** Do not break it. Every version
-   bump so far was verified against a copy of a real save. If accounts arrive,
-   the local save becomes a *cache* rather than the truth — plan that transition
-   explicitly instead of letting both drift.
-5. **`apps/web` has no tests.** Phase 6 adds a server, where hand-verification
-   in a browser stops being sufficient. Set up server tests in its first slice;
-   retrofitting is exactly what the engine avoided by testing from phase 1.
-6. **Don't leak the economy into the engine.** `packages/engine` knows nothing
-   about herbs, recipes, banks or accounts, and that separation is load-bearing
-   (`world/professions.ts` header says so). Guild bank logic belongs web/server
-   side.
-7. **Crafted gear is deliberately unbuilt** and is a live decision, not an
-   oversight. §6 frames catalysts around tier-2 weapons, but items carry `tier`
-   as pure balance labelling with no cost or source, there is no recipe→item
-   path anywhere, and all gear is **free-pick** in the dropdowns — so crafted
-   gear means introducing gear **ownership**, which retroactively gates every
-   item currently selectable. Its own scoped slice, with the user's sign-off.
+- **Raid balance retune.** Ashkar and Vael sit near ~100% at default gear.
+  Normal ≈ 90% plus a Heroic (stat-proof) variant is still owed, and it needs
+  *survivability variance* — the TTK distribution is currently too tight for a
+  clean enrage wall. Engine-only, no UI dependency, and world-boss tuning will
+  inherit whatever conventions it sets, so it is worth doing before guilds.
+- **Full call palette.** GDD §3 lists ~15 calls across Offensive / Defensive /
+  Tactical / Meta; three ship today. Naturally paired with the UI work, since
+  the palette is where the calls live.
+- **Crafted gear** — a live decision, not an oversight. §6 frames catalysts
+  around tier-2 weapons, but items carry `tier` as pure balance labelling with
+  no cost or source, there is no recipe→item path anywhere, and all gear is
+  **free-pick** in the dropdowns. Crafted gear therefore means introducing gear
+  **ownership**, which retroactively gates every item currently selectable.
+  Needs its own scoped slice and the user's sign-off.
 
 ---
 
-## 5. How to work in this repo (conventions that are actually enforced)
+## 4. Repo conventions that are actually enforced
 
-- **One commit per slice**, with the reasoning in the body — not just the what.
-  `git log` is the design record; read a few phase-5 commits for the register.
+- **One commit per slice**, reasoning in the body — not just the what. `git log`
+  is the design record; read a few phase-5 commits for the register.
 - **Update `STATUS.md` whenever a slice lands.** It is the ledger and the
   handoff surface between sessions.
+- **Author the slice plan BEFORE writing code.** Phases 4 and 5 were both
+  planned up front (the plans are recorded in `STATUS.md`), and that discipline
+  is why the byte-identity law survived two phases of heavy refactoring.
 - **Byte-identity is a hard law.** Any engine change must leave existing streams
-  bit-for-bit unchanged. The baseline commit is **`c9ef804`** (the last commit
-  before phase-5 engine work). The check:
+  bit-for-bit unchanged. Baseline commit: **`c9ef804`**. Capture there and on
+  your branch, then diff:
 
   ```sh
-  # capture on c9ef804 and on your branch, then diff the two directories
   for a in "--boss cinder-maw" "--boss emberwing --level 9" \
            "--boss bandit-warlord --level 3" "--encounter forge-whelps" \
            "--encounter slagmaw" "--encounter vulkan" \
@@ -153,43 +187,48 @@ crafting materials that feed the *existing* economy.
   done
   ```
 
-  For changes touching shared code, diff **full event streams** across several
-  seeds, not just the `--json` aggregates — an aggregate can match while a
-  single melee target flipped. Slice 8's carrier change was verified across 23
+  For changes touching shared code, diff **full event streams across several
+  seeds**, not just the `--json` aggregates — an aggregate can match while a
+  single melee target flipped. Slice 8's carrier fix was verified across 23
   artifacts this way.
 - **Engine before web inside every slice.**
 - **In-browser verification is expected** for web slices. Two hard-won gotchas:
   1. **Stash the real save to a file before any migration test.** Migrations run
      on page load, so *opening the app is the test*.
-  2. **Seeding a test save requires freezing `localStorage.setItem`** right after
-     writing and before reload — the world tick persists so eagerly it clobbers
-     any external write. Close other app tabs first; a second open tab
+  2. **Seeding a test save requires freezing `localStorage.setItem`** right
+     after writing and before reload — the world tick persists so eagerly it
+     clobbers any external write. Close other app tabs first; a second open tab
      overwrites the seed.
 - **`--trace` prints only the last ~25–30 events.** Mid-fight events
   (`targetChanged`, `buffRemoved`, `interrupted`) fall outside that window, so
-  grepping the trace for them returns nothing and proves nothing.
+  grepping the trace for them proves nothing.
   `packages/engine/test/raid.test.ts` is the real verification.
-- **Playback speed resets to 1× on every pull** — mildly annoying when
-  re-running a 3-minute raid boss. Cosmetic, unfixed, noted so you don't think
-  a click failed.
+- **Playback speed resets to 1× on every pull** — annoying when re-running a
+  3-minute raid boss. Cosmetic, unfixed, noted so you don't think a click
+  failed. Worth fixing during the UI work.
 
 ---
 
-## 6. Suggested first moves
+## 5. Ground truth about the codebase
 
-1. Read `STATUS.md` end to end, especially "Phase 5 — autonomous design
-   decisions" and "open design questions". Most phase-6 traps are foreshadowed
-   there.
-2. Resolve the **authority model** and **loot rules** with the user before
-   planning slices. Both are product decisions, not implementation details.
-3. Consider landing the **raid balance retune** first as a small, self-contained
-   phase-5 coda — it is owed, it is engine-only, and it sets conventions
-   world-boss tuning will inherit.
-4. Then author a phase-6 slice plan **before writing code**, the way phases 4
-   and 5 were planned (both slice plans are recorded in `STATUS.md`, authored
-   ahead of implementation — that discipline is why the byte-identity law
-   survived two phases of heavy refactoring).
+- **Workspace:** `packages/engine` (pure sim) + `apps/web`.
+  `pnpm-workspace.yaml` already globs `apps/*` and `packages/*`, so an
+  `apps/server` slots in with no tooling changes.
+- **Engine deps: none at runtime.** Keep it that way — it is precisely why the
+  same code can be the server's referee (decision #1).
+- **Web deps:** react, react-dom, zustand, `@rpg/engine`. No router, no data
+  layer, no auth, no UI library.
+- **All state is one `localStorage` key** (`rpg-world-v1`), **persist v15**,
+  written by Zustand `persist` with an explicit `partialize` allowlist in
+  `apps/web/src/store.ts` (~line 1712): `characters`, `rosterOrder`,
+  `loadouts`, `dungeonCleared`, `raidRoster`, `bossLoadouts`, `journal`,
+  `familiarity`, `plans`, `unlocks`, `materials`, `inventory`, `buildings`,
+  `attempts`, `chars`, `lastSeenWall`, `multiplier`. **That allowlist is your
+  account schema** — it is already a clean, serializable snapshot of a player.
+- **Docker:** `compose.yaml` runs one `dev` service, host `5174` → container
+  `5173`. A server needs a second service and port mapping.
+- **No CI, no lint step, no web tests.** The gates are the four commands at the
+  top, run by hand.
 
-*Phase 5's own handoff and its executed results live in `STATUS.md` under
-"Phase 5 — post-merge verification"; the original file is in git history at
-`1d7a641`.*
+*Phase 5's handoff and its executed results live in `STATUS.md` under "Phase 5
+— post-merge verification"; the original file is in git history at `1d7a641`.*
