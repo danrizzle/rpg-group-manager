@@ -90,10 +90,16 @@ $HOST {
 	}
 
 	# Vite content-hashes every asset filename, so they are immutable and can
-	# be cached hard. index.html must NOT be, or clients pin to a stale build.
+	# be cached hard.
 	@assets path /assets/*
 	header @assets Cache-Control "public, max-age=31536000, immutable"
-	header /index.html Cache-Control "no-cache"
+
+	# The HTML must NOT be cached, or a client pins to a stale build forever:
+	# it names the hashed assets, so an old index.html keeps loading old
+	# bundles. Matching BOTH / and /index.html is the point — browsers request
+	# "/", which a bare /index.html matcher silently misses.
+	@html path / /index.html
+	header @html Cache-Control "no-cache"
 }
 CADDY
 
