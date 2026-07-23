@@ -1,11 +1,60 @@
 # Handoff for a fresh session — next up: the game UI, then guilds
 
 **Status: phase 5 is COMPLETE and merged to `main` (`5e602ad`).** 166 engine
-tests green, both typechecks + web build clean, working tree clean.
+tests green, both typechecks + web build clean, working tree clean. Since then,
+one UI slice landed on a branch: **the full backed call palette** (see next).
 
 Read `STATUS.md` first (the ledger — phases 1–5 and the design decisions behind
 them), then the `DESIGN.md` sections named below. This file is the orientation
 layer: what to build next, what is already true, and where the traps are.
+
+---
+
+## NEXT SLICE — the rest of the GDD §3 call palette (engine-backed calls)
+
+**Prompt for a fresh session:** *Finish the GDD §3 call catalog. The
+presentation layer is done — `apps/web/src/components/callCatalog.ts` is the
+single source of live calls, grouped by category, and `FightView` renders it as
+a categorized palette. The 10 calls whose actions the engine already supports
+ship. Four remain, and each is blocked on an engine system that does not exist
+yet — this slice builds those systems (engine-first, byte-identity law applies),
+then adds each call to `LIVE_CALLS`.*
+
+The four, and what each needs (do them as separate sub-slices, not one lump):
+
+1. **"Dodge!"** — a group **movement-phase** action. `movementPenalty` exists on
+   abilities (`ability.ts`) but there is no `PlanAction` that puts the party into
+   a movement window (boss AoE avoided, DPS lost via "damage while moving"). Needs
+   a new action kind + sim handling + probably a new `AbilityTag`.
+2. **"Healers save mana!" / "Pump!"** — a healer **throttle**. Blocked hard:
+   **there is no mana economy in the sim at all.** This is really "add a resource
+   model for healers," not a palette button. Scope it as its own design+engine
+   slice; do not fake it.
+3. **Heal-CD *chain*** — "which healer pops next?" Today "Heal CD now!" fires
+   *every* heal-CD at once. A chain needs ordering/round-robin state so calls pop
+   one healer per press. Engine-side sequencing.
+4. **"Below 20%: everything out + potions"** — a **compound / conditional** call
+   (a batch that also arms a threshold). `PlanAction` is a single flat action and
+   calls fire immediately; this needs either a compound action or a call that
+   installs a `bossHpBelow` plan entry on the fly.
+
+**Also owed on the palette that just landed (cheap, do first):** a **manual
+in-browser pass** — the catalog *logic* is unit-verified (`derive` batch sizes /
+shapes against a 10-man comp) and it typechecks + builds, but nobody has clicked
+the new buttons at a live raid frontier yet. Pull Cinderforge, confirm each new
+call fires at the frontier, that Retreat's confirm ends the attempt as a retreat
+(not a wipe), and that adoption still labels each call. `apps/web` has **zero
+tests**, so this click-through is the only gate on the render path.
+
+**Traps for this slice:** the engine is a pure, zero-dep, deterministic module —
+new actions/tags must leave every existing stream **byte-identical** vs
+`c9ef804` (§ conventions below). "Potions now!" was deliberately *left out* of
+the shipped palette: consumables live in `char.abilities` but auto-fire through
+a dedicated charge/cooldown path (`engine.ts` ~L849, `decision.ts` ~L89), so
+firing one via the generic `ability` call path is untested — if you add it,
+verify the charge accounting, don't just surface the button.
+
+---
 
 Everything runs in Docker via the wrappers — never install tooling on the host.
 
@@ -171,6 +220,10 @@ crafting materials that feed the *existing* economy.
   is the design record; read a few phase-5 commits for the register.
 - **Update `STATUS.md` whenever a slice lands.** It is the ledger and the
   handoff surface between sessions.
+- **Always write a handoff prompt for the next slice.** End every slice by
+  refreshing this file (or an equivalent next-slice brief) so a fresh session
+  can pick up cold — name the next slice, what's already true, and the traps.
+  This is why the handoff surface stays warm between sessions.
 - **Author the slice plan BEFORE writing code.** Phases 4 and 5 were both
   planned up front (the plans are recorded in `STATUS.md`), and that discipline
   is why the byte-identity law survived two phases of heavy refactoring.
