@@ -27,12 +27,26 @@ catalysts, craft raid consumables, and assign loadouts per boss. **166 engine
 tests green; both typechecks + web build clean; all 8 CLI streams
 byte-identical vs `c9ef804` throughout.** Persist ran v10 → **v15**.
 
+**Call palette — GDD §3 (2026-07-23).** The live-call palette went from 3 hard-
+coded buttons to the **full backed catalog (10 calls), grouped by §3 category**
+(Offensive / Defensive / Tactical / Meta): All CDs · DPS to AoE · Focus fire ·
+Heal CD · Everyone defensive · Tank swap · Take the kicks · Battle res · Retreat
+· Stop damage/Push. UI-only — a new `apps/web/src/components/callCatalog.ts` is
+the single source both the palette and the plan editor derive from (`CALL_TAGS`
+shared, so the two can't drift). **Engine untouched → byte-identity holds by
+construction; 166 tests + both typechecks + web build green.** The four calls
+that need engine systems this game doesn't have yet are the **next slice** (see
+below). Convention added this slice (CLAUDE.md + HANDOFF.md): **always write a
+handoff prompt for the next slice.**
+
 **Still owed, none blocking:** the raid **balance retune** (Normal ≈ 90% + a
 Heroic variant — currently ~100% at default gear, and the TTK distribution is
 too tight for a clean enrage wall without survivability variance; engine-only,
-worth doing before world-boss tuning inherits its conventions) and the **full
-~15-call GDD §3 palette** (3 calls ship — naturally paired with the UI work,
-since the palette is where the calls live).
+worth doing before world-boss tuning inherits its conventions) and the **rest
+of the GDD §3 palette** — Dodge!, Healers save mana!/Pump!, the heal-CD *chain*,
+and "Below 20%: everything out + potions" — each needs new engine machinery (a
+movement-phase model, a mana economy, chain/compound calls), so it's its own
+slice, not palette wiring.
 
 **Deferred by decision, not oversight** (user, 2026-07-19): **loot rules** stay
 out of scope until they get real design work — every reward remains

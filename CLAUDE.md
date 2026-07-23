@@ -51,3 +51,7 @@ CLI tuning flags: `--gear naked|starter|default|best`, `--hp`, `--enrage <s>`,
 - Update `STATUS.md` when a roadmap slice lands or balance targets move.
 - Commit per slice/experiment; balance numbers live in
   `packages/engine/src/content/` (classes, bosses, items).
+- Always end a slice by writing a handoff prompt for the next slice that needs
+  doing: refresh `HANDOFF.md` (or an equivalent next-slice brief) so a fresh
+  session can pick up cold — name the next slice, what's already true, and the
+  traps.

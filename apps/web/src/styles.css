@@ -176,12 +176,19 @@ body {
 
 /* Live-call palette (slice 6): the tactical-pause action bar. */
 .call-palette {
-  display: flex; align-items: center; gap: 6px; margin: 10px 0 0;
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 14px; margin: 10px 0 0;
   padding: 6px 8px; border-radius: 6px;
   background: #211a10; border: 1px solid var(--gold);
 }
 .call-palette .btn:disabled { opacity: 0.4; cursor: default; }
-.call-hint { font-size: 11px; margin-left: auto; }
+/* Each §3 category is a labelled cluster; buttons wrap so ten calls stay
+   thumb-reachable on a phone instead of overflowing one row. */
+.call-group { display: flex; flex-direction: column; gap: 4px; }
+.call-group-label {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.call-group-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.call-hint { font-size: 11px; margin-left: auto; align-self: flex-end; }
 .calls-review { margin-top: 8px; border-top: 1px solid var(--panel-edge); padding-top: 6px; }
 .calls-review .btn-small { margin-left: 6px; }
 

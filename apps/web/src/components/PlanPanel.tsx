@@ -10,6 +10,7 @@ import {
 import { useMemo, useState } from 'react';
 import { mmss } from '../fight/replay';
 import { useStore, type JournalEntry } from '../store';
+import { CALL_TAGS, type PartyLike } from './callCatalog';
 
 /**
  * The boss plan editor (GDD §4): journal entries are the building blocks —
@@ -36,17 +37,17 @@ interface ActionOption {
  *
  * Still curated, not a full char × ability matrix (GDD §3 bans list-maintenance
  * feel): only the tagged cooldowns that are worth planning around, plus the
- * party-wide levers.
+ * party-wide levers. The tag set is shared with the live palette (`CALL_TAGS`)
+ * so the plan arsenal and the calls can't drift — "the same vocabulary in three
+ * forms" (§8).
  */
-const PLANNABLE_TAGS = ['burst', 'heal-cd', 'defensive', 'battle-res'];
-
 function actionOptions(party: PartyLike): ActionOption[] {
   const opts: ActionOption[] = [];
   for (const m of party) {
     const c = m.character;
     const charId = c.id ?? 'player';
     for (const ability of c.abilities) {
-      if (!ability.tags.some((t) => PLANNABLE_TAGS.includes(t))) continue;
+      if (!ability.tags.some((t) => (CALL_TAGS as readonly string[]).includes(t))) continue;
       opts.push({
         id: `${charId}:${ability.id}`,
         label: `${ability.name} (${c.name} — ${ability.tags[0]})`,
@@ -66,15 +67,6 @@ function actionOptions(party: PartyLike): ActionOption[] {
   opts.push({ id: 'push', label: 'Push! (resume DPS)', action: { kind: 'holdDps', hold: false } });
   return opts;
 }
-
-type PartyLike = {
-  character: {
-    id?: string;
-    name: string;
-    role?: string;
-    abilities: { id: string; name: string; tags: readonly string[] }[];
-  };
-}[];
 
 interface TriggerOption {
   id: string;

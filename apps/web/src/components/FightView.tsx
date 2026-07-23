@@ -3,6 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildLog, mmss, Replay, type ActorView } from '../fight/replay';
 import { useStore, type AttemptSummary, type FightState } from '../store';
 import type { BossId } from '../world/types';
+import {
+  CALL_CATEGORY_LABEL,
+  CALL_CATEGORY_ORDER,
+  LIVE_CALLS,
+  type PartyLike,
+} from './callCatalog';
 
 const BUFF_NAMES: Record<string, string> = {
   combustion: 'Combustion',
@@ -24,21 +30,6 @@ const POTION_NOTES: Record<PotionNote, string> = {
 };
 
 const cause = (id: string): string => id.replace(/-/g, ' ');
-
-// The live-call palette (GDD §8 Law 1: three buttons, not a piano). Each maps
-// to one or more plan actions issued at the frontier; the same arsenal the plan
-// editor exposes (§3 ground rule 1). Derived from the ACTUAL party's abilities
-// by tag, so comp/talent CDs (Battle Shout, Pyroclasm, Rekindle, …) appear
-// automatically instead of via hardcoded ids.
-type PartyLike = {
-  character: { id?: string; name: string; abilities: { id: string; name: string; tags: readonly string[] }[] };
-}[];
-const callsFor = (party: PartyLike, tag: string): PlanAction[] =>
-  party.flatMap((m) =>
-    m.character.abilities
-      .filter((a) => a.tags.includes(tag))
-      .map((a) => ({ kind: 'ability', charId: m.character.id ?? 'player', abilityId: a.id }) as PlanAction),
-  );
 
 /** Human label for one adopted/logged call action (mirrors PlanPanel). */
 function callLabel(a: PlanAction, party: PartyLike): string {
@@ -341,10 +332,8 @@ export function FightView() {
   const atLiveEdge = !!fight.live && !resolved && Math.abs(frontierMs - playT) < 200;
   const lastHold = [...fight.calls].reverse().find((c) => c.action.kind === 'holdDps');
   const isHolding = lastHold?.action.kind === 'holdDps' ? lastHold.action.hold : false;
-  // Roster-derived call palettes (comp/talent CDs appear automatically).
+  // Roster-derived call palette (comp/talent CDs appear automatically).
   const party = (fight.partyMembers ?? []) as PartyLike;
-  const allCds = callsFor(party, 'burst');
-  const healCds = callsFor(party, 'heal-cd');
 
   return (
     <section className="panel fight-panel">
@@ -430,15 +419,49 @@ export function FightView() {
 
       {fight.live && !resolved && (
         <div className="call-palette">
-          <button className="btn btn-small" disabled={!atLiveEdge || allCds.length === 0} onClick={() => issueCall(allCds)}>
-            All CDs now!
-          </button>
-          <button className="btn btn-small" disabled={!atLiveEdge || healCds.length === 0} onClick={() => issueCall(healCds)}>
-            Heal CD now!
-          </button>
-          <button className="btn btn-small" disabled={!atLiveEdge} onClick={() => issueCall([{ kind: 'holdDps', hold: !isHolding }])}>
-            {isHolding ? 'Push!' : 'Stop damage!'}
-          </button>
+          {CALL_CATEGORY_ORDER.map((cat) => {
+            const calls = LIVE_CALLS.filter((c) => c.category === cat);
+            const isMeta = cat === 'meta';
+            // Meta's only call is the stateful hold-DPS toggle, rendered below.
+            if (calls.length === 0 && !isMeta) return null;
+            return (
+              <div key={cat} className="call-group">
+                <div className="call-group-label muted">{CALL_CATEGORY_LABEL[cat]}</div>
+                <div className="call-group-btns">
+                  {calls.map((call) => {
+                    const actions = call.derive(party);
+                    // Retreat aborts the attempt — confirm before throwing the run away.
+                    const fire =
+                      call.id === 'retreat'
+                        ? () => {
+                            if (window.confirm('Retreat — end the attempt now? The party lives and keeps journal progress.'))
+                              issueCall(actions);
+                          }
+                        : () => issueCall(actions);
+                    return (
+                      <button
+                        key={call.id}
+                        className="btn btn-small"
+                        disabled={!atLiveEdge || actions.length === 0}
+                        onClick={fire}
+                      >
+                        {call.label}
+                      </button>
+                    );
+                  })}
+                  {isMeta && (
+                    <button
+                      className="btn btn-small"
+                      disabled={!atLiveEdge}
+                      onClick={() => issueCall([{ kind: 'holdDps', hold: !isHolding }])}
+                    >
+                      {isHolding ? 'Push!' : 'Stop damage!'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
           <span className="muted call-hint">
             {atLiveEdge ? 'Call at the live moment.' : 'Pause at the frontier to call.'}
           </span>
